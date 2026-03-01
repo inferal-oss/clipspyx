@@ -1,0 +1,20 @@
+[project]
+name = "clipspyx"
+version = "0.1.0"
+description = "CLIPS Python bindings via CFFI"
+license = "BSD-3-Clause"
+requires-python = ">=3.10"
+dependencies = ["cffi>=1.0.0"]
+
+[build-system]
+requires = ["setuptools>=42", "cffi>=1.0.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["clipspyx*"]
+
+[tool.setuptools.package-data]
+clipspyx = ["*.cdef"]
+
+[dependency-groups]
+dev = ["pytest>=8.0.0"]

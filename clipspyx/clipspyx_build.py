@@ -27,11 +27,80 @@
 # OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
 # EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+import os
+import sys
+import glob
+import subprocess
 
 from cffi import FFI
 
 
+def resolve_clips_source():
+    """Resolve CLIPS C source directory.
+
+    Priority:
+    1. CLIPS_SOURCE_DIR env var - arbitrary checkout path
+    2. CLIPS_BRANCH env var - checkout that orphan branch
+    3. Default - auto-checkout clips-64x branch
+    """
+    # Priority 1: explicit source directory
+    src_dir = os.environ.get("CLIPS_SOURCE_DIR")
+    if src_dir:
+        src_dir = os.path.abspath(src_dir)
+        if not os.path.isdir(src_dir):
+            raise FileNotFoundError(
+                f"CLIPS_SOURCE_DIR={src_dir} does not exist")
+        return src_dir
+
+    # Priority 2/3: checkout from local orphan branch
+    branch = os.environ.get("CLIPS_BRANCH", "clips-64x")
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    checkout_dir = os.path.join(repo_root, ".clips-source")
+
+    if os.path.isdir(checkout_dir):
+        # Already checked out; verify it's the right branch
+        return checkout_dir
+
+    # Attempt git worktree checkout
+    try:
+        subprocess.run(
+            ["git", "worktree", "add", checkout_dir, branch],
+            check=True, capture_output=True, text=True,
+            cwd=repo_root)
+    except subprocess.CalledProcessError as e:
+        # Check if branch exists
+        result = subprocess.run(
+            ["git", "branch", "--list", branch],
+            capture_output=True, text=True, cwd=repo_root)
+        if not result.stdout.strip():
+            print(
+                f"Error: Branch '{branch}' not found.\n"
+                f"Run: ./scripts/sync-svn.sh 64x\n"
+                f"Or set CLIPS_SOURCE_DIR to point to CLIPS source.",
+                file=sys.stderr)
+        raise FileNotFoundError(
+            f"Cannot checkout CLIPS source from branch '{branch}': "
+            f"{e.stderr.strip()}")
+
+    return checkout_dir
+
+
+# Resolve CLIPS source directory
+clips_src = resolve_clips_source()
+
+# setuptools requires relative paths - make relative to repo root
+repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+clips_src_rel = os.path.relpath(clips_src, repo_root)
+
+# Collect all .c files from CLIPS source (as relative paths)
+clips_c_files = sorted(glob.glob(os.path.join(clips_src_rel, "*.c")))
+if not clips_c_files:
+    raise FileNotFoundError(
+        f"No .c files found in {clips_src}. "
+        f"Is this a valid CLIPS source directory?")
+
 ffibuilder = FFI()
+
 CLIPS_SOURCE = """
 #include <clips.h>
 
@@ -53,18 +122,22 @@ int DefinePythonFunction(Environment *environment)
 }
 """
 
-
-with open("lib/clips.cdef") as cdef_file:
+# Read CFFI definitions from the .cdef file bundled in the package
+cdef_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "clips.cdef")
+with open(cdef_path) as cdef_file:
     CLIPS_CDEF = cdef_file.read()
 
-
-ffibuilder.set_source("_clips",
-                      CLIPS_SOURCE,
-                      libraries=["clips"])
-
+# Compile CLIPS source directly into the CFFI extension
+ffibuilder.set_source(
+    "clipspyx._clipspyx",
+    CLIPS_SOURCE,
+    sources=clips_c_files,
+    include_dirs=[clips_src_rel],
+    extra_compile_args=["-std=c99", "-O2", "-fno-strict-aliasing"],
+    extra_link_args=["-lm"])
 
 ffibuilder.cdef(CLIPS_CDEF)
-
 
 if __name__ == "__main__":
     ffibuilder.compile(verbose=True)
