@@ -29,11 +29,11 @@
 
 import sys
 
-from clips import common
-from clips.classes import Instance
-from clips.facts import new_fact, ImpliedFact, TemplateFact
+from clipspyx import common
+from clipspyx.classes import Instance
+from clipspyx.facts import new_fact, ImpliedFact, TemplateFact
 
-from clips._clips import lib, ffi  # pylint: disable=E0611
+from clipspyx._clipspyx import lib, ffi  # pylint: disable=E0611
 
 
 class Symbol(str):

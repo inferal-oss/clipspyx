@@ -30,7 +30,7 @@
 from enum import IntEnum
 from collections import namedtuple
 
-from clips._clips import lib, ffi
+from clipspyx._clipspyx import lib, ffi
 
 
 class CLIPSError(RuntimeError):

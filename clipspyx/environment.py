@@ -27,18 +27,18 @@
 # OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
 # EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-import clips
+import clipspyx
 
-from clips.facts import Facts
-from clips.agenda import Agenda
-from clips.classes import Classes
-from clips.modules import Modules
-from clips.functions import Functions
-from clips.routers import Routers, ErrorRouter
-from clips.common import CLIPSError
-from clips.common import initialize_environment_data, delete_environment_data
+from clipspyx.facts import Facts
+from clipspyx.agenda import Agenda
+from clipspyx.classes import Classes
+from clipspyx.modules import Modules
+from clipspyx.functions import Functions
+from clipspyx.routers import Routers, ErrorRouter
+from clipspyx.common import CLIPSError
+from clipspyx.common import initialize_environment_data, delete_environment_data
 
-from clips._clips import lib
+from clipspyx._clipspyx import lib
 
 
 class Environment:
@@ -158,13 +158,13 @@ class Environment:
         Equivalent to the CLIPS (eval) function.
 
         """
-        value = clips.values.clips_value(self._env)
+        value = clipspyx.values.clips_value(self._env)
 
         ret = lib.Eval(self._env, expression.encode(), value)
         if ret != lib.EE_NO_ERROR:
             raise CLIPSError(self._env, code=ret)
 
-        return clips.values.python_value(self._env, value)
+        return clipspyx.values.python_value(self._env, value)
 
     def reset(self):
         """Reset the CLIPS environment.

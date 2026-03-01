@@ -2,8 +2,8 @@ import os
 import unittest
 from tempfile import mkstemp
 
-from clips import Environment, Symbol, InstanceName
-from clips import CLIPSError, ClassDefaultMode, LoggingRouter
+from clipspyx import Environment, Symbol, InstanceName
+from clipspyx import CLIPSError, ClassDefaultMode, LoggingRouter
 
 
 DEFCLASSES = [

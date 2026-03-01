@@ -40,14 +40,14 @@
 
 import os
 
-import clips
+import clipspyx
 
-from clips.modules import Module
-from clips.common import PutSlotError, PUT_SLOT_ERROR
-from clips.common import CLIPSError, SaveMode, ClassDefaultMode
-from clips.common import environment_builder, environment_modifier
+from clipspyx.modules import Module
+from clipspyx.common import PutSlotError, PUT_SLOT_ERROR
+from clipspyx.common import CLIPSError, SaveMode, ClassDefaultMode
+from clipspyx.common import environment_builder, environment_modifier
 
-from clips._clips import lib, ffi
+from clipspyx._clipspyx import lib, ffi
 
 
 class Instance:
@@ -123,7 +123,7 @@ class Instance:
             raise CLIPSError(self._env, code=ret)
 
         for slot, slot_val in slots.items():
-            value = clips.values.clips_value(self._env, value=slot_val)
+            value = clipspyx.values.clips_value(self._env, value=slot_val)
 
             ret = lib.IMPutSlot(modifier, str(slot).encode(), value)
             if ret != PutSlotError.PSE_NO_ERROR:
@@ -140,13 +140,13 @@ class Instance:
         Equivalent to the CLIPS (send) function.
 
         """
-        output = clips.values.clips_value(self._env)
-        instance = clips.values.clips_value(self._env, value=self)
+        output = clipspyx.values.clips_value(self._env)
+        instance = clipspyx.values.clips_value(self._env, value=self)
 
         args = arguments.encode() if arguments is not None else ffi.NULL
         lib.Send(self._env, instance, message.encode(), args, output)
 
-        return clips.values.python_value(self._env, output)
+        return clipspyx.values.python_value(self._env, output)
 
     def delete(self):
         """Directly delete the instance."""
@@ -268,7 +268,7 @@ class Class:
             raise CLIPSError(self._env, code=ret)
 
         for slot, slot_val in slots.items():
-            value = clips.values.clips_value(self._env, value=slot_val)
+            value = clipspyx.values.clips_value(self._env, value=slot_val)
 
             ret = lib.IBPutSlot(builder, str(slot).encode(), value)
             if ret != PutSlotError.PSE_NO_ERROR:
@@ -292,12 +292,12 @@ class Class:
 
     def slots(self, inherited: bool = False) -> iter:
         """Iterate over the Slots of the class."""
-        value = clips.values.clips_value(self._env)
+        value = clipspyx.values.clips_value(self._env)
 
         lib.ClassSlots(self._ptr(), value, inherited)
 
         return (ClassSlot(self._env, self.name, n)
-                for n in clips.values.python_value(self._env, value))
+                for n in clipspyx.values.python_value(self._env, value))
 
     def instances(self) -> iter:
         """Iterate over the instances of the class."""
@@ -314,12 +314,12 @@ class Class:
         Equivalent to the CLIPS (class-subclasses) function.
 
         """
-        value = clips.values.clips_value(self._env)
+        value = clipspyx.values.clips_value(self._env)
 
         lib.ClassSubclasses(self._ptr(), value, inherited)
 
         for defclass in classes(
-                self._env, clips.values.python_value(self._env, value)):
+                self._env, clipspyx.values.python_value(self._env, value)):
             yield defclass
 
     def superclasses(self, inherited=False) -> iter:
@@ -328,12 +328,12 @@ class Class:
         Equivalent to the CLIPS class-superclasses command.
 
         """
-        value = clips.values.clips_value(self._env)
+        value = clipspyx.values.clips_value(self._env)
 
         lib.ClassSuperclasses(self._ptr(), value, int(inherited))
 
         for defclass in classes(
-                self._env, clips.values.python_value(self._env, value)):
+                self._env, clipspyx.values.python_value(self._env, value)):
             yield defclass
 
     def message_handlers(self) -> iter:
@@ -433,10 +433,10 @@ class ClassSlot:
         Equivalent to the CLIPS (slot-types) function.
 
         """
-        value = clips.values.clips_value(self._env)
+        value = clipspyx.values.clips_value(self._env)
 
         if lib.SlotTypes(self._ptr(), self._name, value):
-            return clips.values.python_value(self._env, value)
+            return clipspyx.values.python_value(self._env, value)
         else:
             raise CLIPSError(self._env)
 
@@ -447,10 +447,10 @@ class ClassSlot:
         Equivalent to the CLIPS (slot-sources) function.
 
         """
-        value = clips.values.clips_value(self._env)
+        value = clipspyx.values.clips_value(self._env)
 
         if lib.SlotSources(self._ptr(), self._name, value):
-            return clips.values.python_value(self._env, value)
+            return clipspyx.values.python_value(self._env, value)
         else:
             raise CLIPSError(self._env)
 
@@ -461,10 +461,10 @@ class ClassSlot:
         Equivalent to the CLIPS (slot-range) function.
 
         """
-        value = clips.values.clips_value(self._env)
+        value = clipspyx.values.clips_value(self._env)
 
         if lib.SlotRange(self._ptr(), self._name, value):
-            return clips.values.python_value(self._env, value)
+            return clipspyx.values.python_value(self._env, value)
         else:
             raise CLIPSError(self._env)
 
@@ -475,10 +475,10 @@ class ClassSlot:
         Equivalent to the CLIPS (slot-facets) function.
 
         """
-        value = clips.values.clips_value(self._env)
+        value = clipspyx.values.clips_value(self._env)
 
         if lib.SlotFacets(self._ptr(), self._name, value):
-            return clips.values.python_value(self._env, value)
+            return clipspyx.values.python_value(self._env, value)
         else:
             raise CLIPSError(self._env)
 
@@ -489,10 +489,10 @@ class ClassSlot:
         Equivalent to the CLIPS slot-cardinality function.
 
         """
-        value = clips.values.clips_value(self._env)
+        value = clipspyx.values.clips_value(self._env)
 
         if lib.SlotCardinality(self._ptr(), self._name, value):
-            return clips.values.python_value(self._env, value)
+            return clipspyx.values.python_value(self._env, value)
         else:
             raise CLIPSError(self._env)
 
@@ -503,10 +503,10 @@ class ClassSlot:
         Equivalent to the CLIPS (slot-default-value) function.
 
         """
-        value = clips.values.clips_value(self._env)
+        value = clipspyx.values.clips_value(self._env)
 
         if lib.SlotDefaultValue(self._ptr(), self._name, value):
-            return clips.values.python_value(self._env, value)
+            return clipspyx.values.python_value(self._env, value)
         else:
             raise CLIPSError(self._env)
 
@@ -517,10 +517,10 @@ class ClassSlot:
         Equivalent to the CLIPS (slot-allowed-values) function.
 
         """
-        value = clips.values.clips_value(self._env)
+        value = clipspyx.values.clips_value(self._env)
 
         if lib.SlotAllowedValues(self._ptr(), self._name, value):
-            return clips.values.python_value(self._env, value)
+            return clipspyx.values.python_value(self._env, value)
         else:
             raise CLIPSError(self._env)
 
@@ -530,7 +530,7 @@ class ClassSlot:
         Equivalent to the CLIPS (slot-allowed-classes) function.
 
         """
-        value = clips.values.clips_value(self._env)
+        value = clipspyx.values.clips_value(self._env)
 
         lib.SlotAllowedClasses(self._ptr(), self._name, value)
 
@@ -867,13 +867,13 @@ class Classes:
 
 
 def slot_value(env: ffi.CData, ist: ffi.CData, slot: str) -> type:
-    value = clips.values.clips_value(env)
+    value = clipspyx.values.clips_value(env)
 
     ret = lib.DirectGetSlot(ist, slot.encode(), value)
     if ret != lib.GSE_NO_ERROR:
         raise CLIPSError(env, code=ret)
 
-    return clips.values.python_value(env, value)
+    return clipspyx.values.python_value(env, value)
 
 
 def classes(env: ffi.CData, names: (list, tuple)) -> iter:

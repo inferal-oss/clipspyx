@@ -1,6 +1,6 @@
 import unittest
 
-from clips import Environment, Symbol, CLIPSError
+from clipspyx import Environment, Symbol, CLIPSError
 
 
 DEFFUNCTION1 = """(deffunction function-sum (?a ?b) (+ ?a ?b))"""

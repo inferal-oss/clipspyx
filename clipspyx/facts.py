@@ -42,14 +42,14 @@ import os
 
 from itertools import chain
 
-import clips
+import clipspyx
 
-from clips.modules import Module
-from clips.common import PutSlotError, PUT_SLOT_ERROR
-from clips.common import environment_builder, environment_modifier
-from clips.common import CLIPSError, SaveMode, TemplateSlotDefaultType
+from clipspyx.modules import Module
+from clipspyx.common import PutSlotError, PUT_SLOT_ERROR
+from clipspyx.common import environment_builder, environment_modifier
+from clipspyx.common import CLIPSError, SaveMode, TemplateSlotDefaultType
 
-from clips._clips import lib, ffi
+from clipspyx._clipspyx import lib, ffi
 
 
 class Fact:
@@ -174,7 +174,7 @@ class TemplateFact(Fact):
             raise CLIPSError(self._env, code=ret)
 
         for slot, slot_val in slots.items():
-            value = clips.values.clips_value(self._env, value=slot_val)
+            value = clipspyx.values.clips_value(self._env, value=slot_val)
 
             ret = lib.FMPutSlot(modifier, str(slot).encode(), value)
             if ret != PutSlotError.PSE_NO_ERROR:
@@ -259,12 +259,12 @@ class Template:
         if self.implied:
             return ()
 
-        value = clips.values.clips_value(self._env)
+        value = clipspyx.values.clips_value(self._env)
 
         lib.DeftemplateSlotNames(self._ptr(), value)
 
         return tuple(TemplateSlot(self._env, self.name, n)
-                     for n in clips.values.python_value(self._env, value))
+                     for n in clipspyx.values.python_value(self._env, value))
 
     @property
     def watch(self) -> bool:
@@ -299,7 +299,7 @@ class Template:
             raise CLIPSError(self._env, code=ret)
 
         for slot, slot_val in slots.items():
-            value = clips.values.clips_value(self._env, value=slot_val)
+            value = clipspyx.values.clips_value(self._env, value=slot_val)
 
             ret = lib.FBPutSlot(builder, str(slot).encode(), value)
             if ret != PutSlotError.PSE_NO_ERROR:
@@ -374,10 +374,10 @@ class TemplateSlot:
         Equivalent to the CLIPS (deftemplate-slot-types) function.
 
         """
-        value = clips.values.clips_value(self._env)
+        value = clipspyx.values.clips_value(self._env)
 
         if lib.DeftemplateSlotTypes(self._ptr(), self._name, value):
-            return clips.values.python_value(self._env, value)
+            return clipspyx.values.python_value(self._env, value)
 
         raise CLIPSError(self._env)
 
@@ -388,10 +388,10 @@ class TemplateSlot:
         Equivalent to the CLIPS (deftemplate-slot-range) function.
 
         """
-        value = clips.values.clips_value(self._env)
+        value = clipspyx.values.clips_value(self._env)
 
         if lib.DeftemplateSlotRange(self._ptr(), self._name, value):
-            return clips.values.python_value(self._env, value)
+            return clipspyx.values.python_value(self._env, value)
 
         raise CLIPSError(self._env)
 
@@ -402,10 +402,10 @@ class TemplateSlot:
         Equivalent to the CLIPS (deftemplate-slot-cardinality) function.
 
         """
-        value = clips.values.clips_value(self._env)
+        value = clipspyx.values.clips_value(self._env)
 
         if lib.DeftemplateSlotCardinality(self._ptr(), self._name, value):
-            return clips.values.python_value(self._env, value)
+            return clipspyx.values.python_value(self._env, value)
 
         raise CLIPSError(self._env)
 
@@ -426,10 +426,10 @@ class TemplateSlot:
         Equivalent to the CLIPS (deftemplate-slot-default-value) function.
 
         """
-        value = clips.values.clips_value(self._env)
+        value = clipspyx.values.clips_value(self._env)
 
         if lib.DeftemplateSlotDefaultValue(self._ptr(), self._name, value):
-            return clips.values.python_value(self._env, value)
+            return clipspyx.values.python_value(self._env, value)
 
         raise CLIPSError(self._env)
 
@@ -440,10 +440,10 @@ class TemplateSlot:
         Equivalent to the CLIPS (slot-allowed-values) function.
 
         """
-        value = clips.values.clips_value(self._env)
+        value = clipspyx.values.clips_value(self._env)
 
         if lib.DeftemplateSlotAllowedValues(self._ptr(), self._name, value):
-            return clips.values.python_value(self._env, value)
+            return clipspyx.values.python_value(self._env, value)
 
         raise CLIPSError(self._env)
 
@@ -634,7 +634,7 @@ def new_fact(env: ffi.CData, fact: ffi.CData) -> (ImpliedFact, TemplateFact):
 
 
 def slot_value(env: ffi.CData, fact: ffi.CData, slot: str = None) -> type:
-    value = clips.values.clips_value(env)
+    value = clipspyx.values.clips_value(env)
     slot = slot.encode() if slot is not None else ffi.NULL
     implied = lib.ImpliedDeftemplate(lib.FactDeftemplate(fact))
 
@@ -645,15 +645,15 @@ def slot_value(env: ffi.CData, fact: ffi.CData, slot: str = None) -> type:
     if ret != lib.GSE_NO_ERROR:
         raise CLIPSError(env, code=ret)
 
-    return clips.values.python_value(env, value)
+    return clipspyx.values.python_value(env, value)
 
 
 def slot_values(env: ffi.CData, fact: ffi.CData) -> iter:
-    value = clips.values.clips_value(env)
+    value = clipspyx.values.clips_value(env)
     lib.FactSlotNames(fact, value)
 
     return ((s, slot_value(env, fact, slot=s))
-            for s in clips.values.python_value(env, value))
+            for s in clipspyx.values.python_value(env, value))
 
 
 def fact_pp_string(env: ffi.CData, fact: ffi.CData) -> str:

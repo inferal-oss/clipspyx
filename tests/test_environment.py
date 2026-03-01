@@ -2,8 +2,8 @@ import os
 import unittest
 from tempfile import mkstemp
 
-from clips import CLIPSError
-from clips import Environment, Symbol, LoggingRouter, ImpliedFact, InstanceName
+from clipspyx import CLIPSError
+from clipspyx import Environment, Symbol, LoggingRouter, ImpliedFact, InstanceName
 
 DEFRULE_FACT = """
 (defrule fact-rule

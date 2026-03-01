@@ -2,7 +2,7 @@ import os
 import unittest
 from tempfile import mkstemp
 
-from clips import Environment, Symbol, CLIPSError, TemplateSlotDefaultType
+from clipspyx import Environment, Symbol, CLIPSError, TemplateSlotDefaultType
 
 
 DEFTEMPLATE = """(deftemplate MAIN::template-fact

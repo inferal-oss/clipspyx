@@ -39,12 +39,12 @@
 import traceback
 from typing import Union
 
-import clips
+import clipspyx
 
-from clips.modules import Module
-from clips.common import CLIPSError, environment_builder, environment_data
+from clipspyx.modules import Module
+from clipspyx.common import CLIPSError, environment_builder, environment_data
 
-from clips._clips import lib, ffi
+from clipspyx._clipspyx import lib, ffi
 
 
 class Function:
@@ -80,19 +80,19 @@ class Function:
 
     def __call__(self, *arguments):
         """Call the CLIPS function with the given arguments."""
-        value = clips.values.clips_value(self._env)
+        value = clipspyx.values.clips_value(self._env)
         builder = environment_builder(self._env, 'function')
 
         lib.FCBReset(builder)
         for argument in arguments:
             lib.FCBAppend(
-                builder, clips.values.clips_value(self._env, value=argument))
+                builder, clipspyx.values.clips_value(self._env, value=argument))
 
         ret = lib.FCBCall(builder, lib.DeffunctionName(self._ptr()), value)
         if ret != lib.FCBE_NO_ERROR:
             raise CLIPSError(self._env, code=ret)
 
-        return clips.values.python_value(self._env, value)
+        return clipspyx.values.python_value(self._env, value)
 
     def _ptr(self) -> ffi.CData:
         dfc = lib.FindDeffunction(self._env, self._name)
@@ -178,19 +178,19 @@ class Generic:
 
     def __call__(self, *arguments):
         """Call the CLIPS Generic function with the given arguments."""
-        value = clips.values.clips_value(self._env)
+        value = clipspyx.values.clips_value(self._env)
         builder = environment_builder(self._env, 'function')
 
         lib.FCBReset(builder)
         for argument in arguments:
             lib.FCBAppend(
-                builder, clips.values.clips_value(self._env, value=argument))
+                builder, clipspyx.values.clips_value(self._env, value=argument))
 
         ret = lib.FCBCall(builder, lib.DefgenericName(self._ptr()), value)
         if ret != lib.FCBE_NO_ERROR:
             raise CLIPSError(self._env, code=ret)
 
-        return clips.values.python_value(self._env, value)
+        return clipspyx.values.python_value(self._env, value)
 
     def _ptr(self) -> ffi.CData:
         gnc = lib.FindDefgeneric(self._env, self._name)
@@ -308,11 +308,11 @@ class Method(object):
 
     @property
     def restrictions(self) -> tuple:
-        value = clips.values.clips_value(self._env)
+        value = clipspyx.values.clips_value(self._env)
 
         lib.GetMethodRestrictions(self._ptr(), self._idx, value)
 
-        return clips.values.python_value(self._env, value)
+        return clipspyx.values.python_value(self._env, value)
 
     @property
     def description(self) -> str:
@@ -355,12 +355,12 @@ class Functions:
         Equivalent to the CLIPS (get-error) function.
 
         """
-        value = clips.values.clips_udf_value(self._env)
+        value = clipspyx.values.clips_udf_value(self._env)
 
         lib.GetErrorFunction(self._env, ffi.NULL, value)
-        state = clips.values.python_value(self._env, value)
+        state = clipspyx.values.python_value(self._env, value)
 
-        if isinstance(state, clips.Symbol):
+        if isinstance(state, clipspyx.Symbol):
             return None
         else:
             return CLIPSError(self._env, message=state)
@@ -375,19 +375,19 @@ class Functions:
 
     def call(self, function: str, *arguments) -> type:
         """Call the CLIPS function with the given arguments."""
-        value = clips.values.clips_value(self._env)
+        value = clipspyx.values.clips_value(self._env)
         builder = environment_builder(self._env, 'function')
 
         lib.FCBReset(builder)
         for argument in arguments:
             lib.FCBAppend(
-                builder, clips.values.clips_value(self._env, value=argument))
+                builder, clipspyx.values.clips_value(self._env, value=argument))
 
         ret = lib.FCBCall(builder, function.encode(), value)
         if ret != lib.FCBE_NO_ERROR:
             raise CLIPSError(self._env, code=ret)
 
-        return clips.values.python_value(self._env, value)
+        return clipspyx.values.python_value(self._env, value)
 
     def functions(self):
         """Iterates over the defined Globals."""
@@ -448,17 +448,17 @@ class Functions:
 @ffi.def_extern()
 def python_function(env: ffi.CData, context: ffi.CData, output: ffi.CData):
     arguments = []
-    value = clips.values.clips_udf_value(env)
+    value = clipspyx.values.clips_udf_value(env)
 
     if lib.UDFFirstArgument(context, lib.SYMBOL_BIT, value):
-        funcname = clips.values.python_value(env, value)
+        funcname = clipspyx.values.python_value(env, value)
     else:
         lib.UDFThrowError(context)
         return
 
     while lib.UDFHasNextArgument(context):
-        if lib.UDFNextArgument(context, clips.values.ANY_TYPE_BITS, value):
-            arguments.append(clips.values.python_value(env, value))
+        if lib.UDFNextArgument(context, clipspyx.values.ANY_TYPE_BITS, value):
+            arguments.append(clipspyx.values.python_value(env, value))
         else:
             lib.UDFThrowError(context)
             return
@@ -471,11 +471,11 @@ def python_function(env: ffi.CData, context: ffi.CData, output: ffi.CData):
         string = "\n".join((message, traceback.format_exc()))
 
         lib.WriteString(env, 'stderr'.encode(), string.encode())
-        clips.values.clips_udf_value(env, message, value)
+        clipspyx.values.clips_udf_value(env, message, value)
         lib.SetErrorValue(env, value.header)
         lib.UDFThrowError(context)
     else:
-        clips.values.clips_udf_value(env, ret, output)
+        clipspyx.values.clips_udf_value(env, ret, output)
 
 
 DEFFUNCTION = """

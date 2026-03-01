@@ -1,6 +1,6 @@
 import unittest
 
-from clips import Environment, CLIPSError, Strategy, SalienceEvaluation
+from clipspyx import Environment, CLIPSError, Strategy, SalienceEvaluation
 
 
 DEFTEMPLATE = """(deftemplate template-fact

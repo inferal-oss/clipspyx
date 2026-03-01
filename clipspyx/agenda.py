@@ -35,13 +35,13 @@
 
 """
 
-import clips
+import clipspyx
 
-from clips.modules import Module
-from clips.common import environment_builder
-from clips.common import CLIPSError, Strategy, SalienceEvaluation, Verbosity
+from clipspyx.modules import Module
+from clipspyx.common import environment_builder
+from clipspyx.common import CLIPSError, Strategy, SalienceEvaluation, Verbosity
 
-from clips._clips import lib, ffi
+from clipspyx._clipspyx import lib, ffi
 
 
 class Rule:
@@ -137,11 +137,11 @@ class Rule:
           * Verbosity.TERSE: (default) nothing is printed to stdout
 
         """
-        value = clips.values.clips_value(self._env)
+        value = clipspyx.values.clips_value(self._env)
 
         lib.Matches(self._ptr(), verbosity, value)
 
-        return clips.values.python_value(self._env, value)
+        return clipspyx.values.python_value(self._env, value)
 
     def refresh(self):
         """Refresh the Rule.

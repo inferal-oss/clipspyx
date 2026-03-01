@@ -35,11 +35,11 @@
 
 """
 
-import clips
+import clipspyx
 
-from clips.common import CLIPSError
+from clipspyx.common import CLIPSError
 
-from clips._clips import lib, ffi
+from clipspyx._clipspyx import lib, ffi
 
 
 class Module:
@@ -124,16 +124,16 @@ class Global:
     @property
     def value(self) -> type:
         """Global value."""
-        value = clips.values.clips_value(self._env)
+        value = clipspyx.values.clips_value(self._env)
 
         lib.DefglobalGetValue(self._ptr(), value)
 
-        return clips.values.python_value(self._env, value)
+        return clipspyx.values.python_value(self._env, value)
 
     @value.setter
     def value(self, value: type):
         """Global value."""
-        value = clips.values.clips_value(self._env, value=value)
+        value = clipspyx.values.clips_value(self._env, value=value)
 
         lib.DefglobalSetValue(self._ptr(), value)
 

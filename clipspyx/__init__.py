@@ -29,7 +29,7 @@
 
 
 __author__ = 'Matteo Cafasso'
-__version__ = '1.0.6'
+__version__ = '0.1.0'
 __license__ = 'BSD-3'
 
 
@@ -53,10 +53,10 @@ __all__ = ('CLIPSError',
            'SaveMode')
 
 
-from clips.environment import Environment
-from clips.classes import Instance, Class
-from clips.values import Symbol, InstanceName
-from clips.routers import Router, LoggingRouter
-from clips.facts import ImpliedFact, TemplateFact, Template
-from clips.common import SaveMode, Strategy, SalienceEvaluation, Verbosity
-from clips.common import CLIPSError, ClassDefaultMode, TemplateSlotDefaultType
+from clipspyx.environment import Environment
+from clipspyx.classes import Instance, Class
+from clipspyx.values import Symbol, InstanceName
+from clipspyx.routers import Router, LoggingRouter
+from clipspyx.facts import ImpliedFact, TemplateFact, Template
+from clipspyx.common import SaveMode, Strategy, SalienceEvaluation, Verbosity
+from clipspyx.common import CLIPSError, ClassDefaultMode, TemplateSlotDefaultType

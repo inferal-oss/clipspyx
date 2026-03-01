@@ -38,10 +38,10 @@
 import logging
 import traceback
 
-import clips
-from clips import common
+import clipspyx
+from clipspyx import common
 
-from clips._clips import lib, ffi
+from clipspyx._clipspyx import lib, ffi
 
 
 class Router:
@@ -107,7 +107,7 @@ class Router:
 
     def delete(self):
         """Delete the Router."""
-        clips.common.environment_data(self._env, 'routers').pop(self.name, None)
+        clipspyx.common.environment_data(self._env, 'routers').pop(self.name, None)
 
         if not lib.DeleteRouter(self._env, self._name.encode()):
             raise RuntimeError("Unable to delete router %s" % self._name)
@@ -220,7 +220,7 @@ class Routers:
             if type(arg) == str:
                 lib.WriteString(self._env, router_name.encode(), arg.encode())
             else:
-                value = clips.values.clips_value(self._env, arg)
+                value = clipspyx.values.clips_value(self._env, arg)
                 lib.WriteCLIPSValue(self._env, router_name.encode(), value)
 
     def add_router(self, router: Router):
