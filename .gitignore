@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+clips/*.c
+clips.zip
+clips_source/
+*.so
+*.o
+GPATH
+GRTAGS
+GTAGS
+.coverage
+.cache
+*build/
+*eggs*
+*.egg-info/
+*_clips.c
+dist/
