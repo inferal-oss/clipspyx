@@ -1,0 +1,3 @@
+# Section 1: Introduction
+
+The *Basic Programming Guide* documents the syntax, features, and behavior of the CLIPS programming language. No previous expert system background is required, al­though a general understanding of computer languages is assumed. Section 2 of this manual provides an overview of the CLIPS language and basic terminology. Sections 3 through 11 provide additional details regarding the CLIPS programming language on topics such as rules and the CLIPS Object‑Oriented Programming Language (COOL). The types of actions and functions provided by CLIPS are defined in Section 12. Finally, commands typically used from the CLIPS interactive interface are described in Section 13.

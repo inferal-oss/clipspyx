@@ -58,10 +58,32 @@ def resolve_clips_source():
     checkout_dir = os.path.join(repo_root, ".clips-source")
 
     if os.path.isdir(checkout_dir):
-        # Already checked out; verify it's the right branch
-        return checkout_dir
+        # Check if it's the right branch, auto-switch if not
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True, text=True, check=True,
+                cwd=checkout_dir)
+            current = result.stdout.strip()
+            if current == branch:
+                return checkout_dir
+            print(f"Switching CLIPS source: {current} -> {branch}")
+            subprocess.run(
+                ["git", "worktree", "remove", checkout_dir],
+                check=True, capture_output=True, text=True,
+                cwd=repo_root)
+        except subprocess.CalledProcessError:
+            import shutil
+            shutil.rmtree(checkout_dir, ignore_errors=True)
+        # Clean up stale worktree references
+        subprocess.run(
+            ["git", "worktree", "prune"],
+            capture_output=True, text=True, cwd=repo_root)
 
     # Attempt git worktree checkout
+    subprocess.run(
+        ["git", "worktree", "prune"],
+        capture_output=True, text=True, cwd=repo_root)
     try:
         subprocess.run(
             ["git", "worktree", "add", checkout_dir, branch],

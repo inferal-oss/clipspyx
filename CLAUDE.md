@@ -36,7 +36,7 @@ uv run pytest tests/ -v
 | `clipspyx/routers.py` | I/O router system |
 | `clipspyx/functions.py` | User-defined functions |
 | `clipspyx/modules.py` | Module, Global variable classes |
-| `scripts/sync-svn.sh` | SVN sync: orphan branches + docs conversion |
+| `scripts/sync-svn.py` | SVN sync: orphan branches + docs conversion |
 
 ## CLIPS Source Branches
 
@@ -44,7 +44,7 @@ Orphan branches contain CLIPS C source (no Python code):
 - `clips-64x`: CLIPS 6.4.x source
 - `clips-70x`: CLIPS 7.0.x source
 
-Synced via `./scripts/sync-svn.sh <branch-suffix>`.
+Synced via `uv run scripts/sync-svn.py <branch-suffix>`.
 
 ## Reference Documentation
 
