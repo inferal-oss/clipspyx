@@ -121,10 +121,26 @@ if not clips_c_files:
         f"No .c files found in {clips_src}. "
         f"Is this a valid CLIPS source directory?")
 
+# Detect CLIPS major version from constant.h
+clips_major = 6
+constant_h = os.path.join(clips_src, "constant.h")
+if os.path.exists(constant_h):
+    import re as _re
+    with open(constant_h) as f:
+        m = _re.search(r'#define\s+VERSION_STRING\s+"(\d+)', f.read())
+        if m:
+            clips_major = int(m.group(1))
+
 ffibuilder = FFI()
 
 CLIPS_SOURCE = """
 #include <clips.h>
+
+/* CLIPS 7.0 renamed DeftemplateGet/SetWatch -> DeftemplateGet/SetWatchFacts. */
+#if CLIPS_MAJOR >= 7
+#define DeftemplateGetWatch DeftemplateGetWatchFacts
+#define DeftemplateSetWatch DeftemplateSetWatchFacts
+#endif
 
 /* Return true if the template is implied. */
 bool ImpliedDeftemplate(Deftemplate *template)
@@ -156,7 +172,8 @@ ffibuilder.set_source(
     CLIPS_SOURCE,
     sources=clips_c_files,
     include_dirs=[clips_src_rel],
-    extra_compile_args=["-std=c99", "-O2", "-fno-strict-aliasing"],
+    extra_compile_args=["-std=c99", "-O2", "-fno-strict-aliasing",
+                        f"-DCLIPS_MAJOR={clips_major}"],
     extra_link_args=["-lm"])
 
 ffibuilder.cdef(CLIPS_CDEF)
