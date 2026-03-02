@@ -19,22 +19,17 @@ Four packages share version `0.1.0`:
 
 ```bash
 # Install with 64x backend (default)
-uv pip install -e backends/ffi && uv pip install -e backends/ffi-64x && uv pip install -e .
+uv sync --extra 64x
 
 # Install with 70x backend
-CLIPS_BRANCH=clips-70x uv pip install -e backends/ffi && uv pip install -e backends/ffi-70x && uv pip install -e .
-
-# Arbitrary CLIPS source
-CLIPS_SOURCE_DIR=/path/to/core uv pip install -e backends/ffi-64x
+uv sync --extra 70x
 
 # Build distributable wheels
 uv run scripts/build-backend.py 64x   # builds clipspyx-ffi + clipspyx-ffi-64x wheels
 uv run scripts/build-backend.py 70x   # builds clipspyx-ffi + clipspyx-ffi-70x wheels
-
-# End-user install (from published wheels)
-pip install clipspyx[64x]
-pip install clipspyx[70x]
 ```
+
+**Switching backends:** The 64x and 70x backends conflict. Always use `uv sync --extra <variant>` to switch. `uv run --extra` does NOT remove the previously installed conflicting backend.
 
 CLIPS C source is compiled directly into the CFFI extension (no separate libclips).
 Source resolution: `CLIPS_SOURCE_DIR` > `CLIPS_BRANCH` env var > default branch.
