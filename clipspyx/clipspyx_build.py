@@ -30,18 +30,35 @@
 import os
 import sys
 import glob
+import hashlib
 import subprocess
 
 from cffi import FFI
 
 
-def resolve_clips_source():
+def _subdir_for_branch(branch: str) -> str:
+    """Return subdirectory name for a CLIPS branch.
+
+    Known branches like clips-64x map to '64x'; arbitrary names
+    are hashed to an 8-char hex prefix.
+    """
+    prefix = "clips-"
+    if branch.startswith(prefix):
+        return branch[len(prefix):]
+    return hashlib.sha256(branch.encode()).hexdigest()[:8]
+
+
+def resolve_clips_source(default_branch=None):
     """Resolve CLIPS C source directory.
 
     Priority:
     1. CLIPS_SOURCE_DIR env var - arbitrary checkout path
     2. CLIPS_BRANCH env var - checkout that orphan branch
-    3. Default - auto-checkout clips-64x branch
+    3. default_branch argument
+    4. Default - auto-checkout clips-64x branch
+
+    Each branch gets its own subdirectory under .clips-source/<suffix>/
+    so multiple source checkouts coexist without switching.
     """
     # Priority 1: explicit source directory
     src_dir = os.environ.get("CLIPS_SOURCE_DIR")
@@ -52,38 +69,37 @@ def resolve_clips_source():
                 f"CLIPS_SOURCE_DIR={src_dir} does not exist")
         return src_dir
 
-    # Priority 2/3: checkout from local orphan branch
-    branch = os.environ.get("CLIPS_BRANCH", "clips-64x")
+    # Priority 2/3/4: checkout from local orphan branch
+    branch = os.environ.get("CLIPS_BRANCH", default_branch or "clips-64x")
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    checkout_dir = os.path.join(repo_root, ".clips-source")
+    base_dir = os.path.join(repo_root, ".clips-source")
+    subdir = _subdir_for_branch(branch)
+    checkout_dir = os.path.join(base_dir, subdir)
 
-    if os.path.isdir(checkout_dir):
-        # Check if it's the right branch, auto-switch if not
-        try:
-            result = subprocess.run(
-                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                capture_output=True, text=True, check=True,
-                cwd=checkout_dir)
-            current = result.stdout.strip()
-            if current == branch:
-                return checkout_dir
-            print(f"Switching CLIPS source: {current} -> {branch}")
-            subprocess.run(
-                ["git", "worktree", "remove", checkout_dir],
-                check=True, capture_output=True, text=True,
-                cwd=repo_root)
-        except subprocess.CalledProcessError:
-            import shutil
-            shutil.rmtree(checkout_dir, ignore_errors=True)
-        # Clean up stale worktree references
+    # Migration: if .clips-source is an old single-worktree layout, remove it
+    git_file = os.path.join(base_dir, ".git")
+    if os.path.isfile(git_file):
+        import shutil
+        subprocess.run(
+            ["git", "worktree", "remove", base_dir],
+            capture_output=True, text=True, cwd=repo_root)
+        if os.path.exists(base_dir):
+            shutil.rmtree(base_dir, ignore_errors=True)
         subprocess.run(
             ["git", "worktree", "prune"],
             capture_output=True, text=True, cwd=repo_root)
 
-    # Attempt git worktree checkout
+    # Already checked out: return immediately
+    if os.path.isdir(checkout_dir):
+        return checkout_dir
+
+    # Create parent directory and prune stale worktrees
+    os.makedirs(base_dir, exist_ok=True)
     subprocess.run(
         ["git", "worktree", "prune"],
         capture_output=True, text=True, cwd=repo_root)
+
+    # Attempt git worktree checkout
     try:
         subprocess.run(
             ["git", "worktree", "add", checkout_dir, branch],

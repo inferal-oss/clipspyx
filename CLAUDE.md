@@ -14,7 +14,7 @@ CLIPS_SOURCE_DIR=/path/to/core pip install -e .  # Arbitrary source
 
 CLIPS C source is compiled directly into the CFFI extension (no separate libclips).
 Source resolution: `CLIPS_SOURCE_DIR` > `CLIPS_BRANCH` env var > default `clips-64x` branch.
-Auto-checkout uses `git worktree add .clips-source <branch>`.
+Auto-checkout uses `git worktree add .clips-source/<suffix> <branch>` (e.g. `.clips-source/64x/`, `.clips-source/70x/`). Multiple checkouts coexist without switching.
 
 ## Test
 
