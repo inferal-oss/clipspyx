@@ -9,7 +9,7 @@ clips_src = resolve_clips_source(default_branch="clips-64x")
 # Symlinks require developer mode on Windows, so use a copy instead.
 local_link = os.path.join(os.path.dirname(__file__), "..", ".clips-source")
 local_link = os.path.normpath(local_link)
-if not os.path.exists(local_link):
+if not os.path.lexists(local_link):
     if sys.platform == "win32":
         import shutil
         shutil.copytree(clips_src, local_link)
