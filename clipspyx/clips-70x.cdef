@@ -1,0 +1,56 @@
+/**********************/
+/* CLIPS 7.0 Deftable */
+/**********************/
+
+typedef struct deftable Deftable;
+
+Deftable *FindDeftable(Environment *, const char *);
+Deftable *GetNextDeftable(Environment *, Deftable *);
+const char *DeftableName(Deftable *);
+const char *DeftableModule(Deftable *);
+const char *DeftablePPForm(Deftable *);
+bool DeftableIsDeletable(Deftable *);
+bool Undeftable(Deftable *, Environment *);
+void GetDeftableList(Environment *, CLIPSValue *, Defmodule *);
+void GetTableValue(Environment *, Deftable *, unsigned int, unsigned int,
+                   UDFValue *);
+unsigned long DeftableRowCount(Deftable *);
+unsigned long DeftableColumnCount(Deftable *);
+
+/*******************/
+/* CLIPS 7.0 Goals */
+/*******************/
+
+Fact *GetNextGoal(Environment *, Fact *);
+Fact *FindIndexedGoal(Environment *, long long);
+RetractError RetractAllGoals(Environment *);
+bool GetGoalListChanged(Environment *);
+void SetGoalListChanged(Environment *, bool);
+void Goals(Environment *, const char *, Defmodule *,
+           long long, long long, long long);
+
+/*************************************/
+/* CLIPS 7.0 Deftemplate Watch Goals */
+/*************************************/
+
+bool DeftemplateGetWatchGoals(Deftemplate *);
+void DeftemplateSetWatchGoals(Deftemplate *, bool);
+
+/*************************************/
+/* CLIPS 7.0 Deftemplate Inheritance */
+/*************************************/
+
+bool HasSupertemplate(Deftemplate *, Deftemplate *);
+bool CanMatchGoal(Deftemplate *);
+
+/*********************************/
+/* CLIPS 7.0 Certainty Factors  */
+/*********************************/
+
+short GetFactCertaintyFactor(Fact *);
+
+/*********************************/
+/* CLIPS 7.0 FMUpdate           */
+/*********************************/
+
+Fact *FMUpdate(FactModifier *);

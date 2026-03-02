@@ -275,6 +275,12 @@ typedef struct udfValue {
     size_t range;
 } UDFValue;
 
+/*****************/
+/* Version Query */
+/*****************/
+
+const int CLIPSPYX_CLIPS_MAJOR;
+
 /***************/
 /* Environment */
 /***************/

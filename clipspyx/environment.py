@@ -35,10 +35,13 @@ from clipspyx.classes import Classes
 from clipspyx.modules import Modules
 from clipspyx.functions import Functions
 from clipspyx.routers import Routers, ErrorRouter
-from clipspyx.common import CLIPSError
+from clipspyx.common import CLIPSError, CLIPS_MAJOR
 from clipspyx.common import initialize_environment_data, delete_environment_data
 
 from clipspyx._clipspyx import lib
+
+if CLIPS_MAJOR >= 7:
+    from clipspyx.tables import Tables
 
 
 class Environment:
@@ -48,7 +51,8 @@ class Environment:
     """
 
     __slots__ = ('_env', '_facts', '_agenda', '_classes',
-                 '_modules', '_functions', '_routers', '_namespaces')
+                 '_modules', '_functions', '_routers', '_tables',
+                 '_namespaces')
 
     def __init__(self):
         self._env = lib.CreateEnvironment()
@@ -64,13 +68,21 @@ class Environment:
 
         self._routers.add_router(ErrorRouter())
 
+        namespaces = (self._facts,
+                      self._agenda,
+                      self._classes,
+                      self._modules,
+                      self._functions,
+                      self._routers)
+
+        if CLIPS_MAJOR >= 7:
+            self._tables = Tables(self._env)
+            namespaces = namespaces + (self._tables,)
+        else:
+            self._tables = None
+
         # mapping between the namespace and the methods it exposes
-        self._namespaces = {m: n for n in (self._facts,
-                                           self._agenda,
-                                           self._classes,
-                                           self._modules,
-                                           self._functions,
-                                           self._routers)
+        self._namespaces = {m: n for n in namespaces
                             for m in dir(n) if not m.startswith('_')}
 
     def __del__(self):

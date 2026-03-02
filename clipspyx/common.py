@@ -32,6 +32,8 @@ from collections import namedtuple
 
 from clipspyx._clipspyx import lib, ffi
 
+CLIPS_MAJOR = lib.CLIPSPYX_CLIPS_MAJOR
+
 
 class CLIPSError(RuntimeError):
     """An error occurred within the CLIPS Environment."""

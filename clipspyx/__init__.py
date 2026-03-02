@@ -34,6 +34,7 @@ __license__ = 'BSD-3'
 
 
 __all__ = ('CLIPSError',
+           'CLIPS_MAJOR',
            'Environment',
            'Router',
            'LoggingRouter',
@@ -60,3 +61,8 @@ from clipspyx.routers import Router, LoggingRouter
 from clipspyx.facts import ImpliedFact, TemplateFact, Template
 from clipspyx.common import SaveMode, Strategy, SalienceEvaluation, Verbosity
 from clipspyx.common import CLIPSError, ClassDefaultMode, TemplateSlotDefaultType
+from clipspyx.common import CLIPS_MAJOR
+
+if CLIPS_MAJOR >= 7:
+    from clipspyx.tables import Deftable
+    __all__ = __all__ + ('Deftable',)

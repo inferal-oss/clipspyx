@@ -45,7 +45,7 @@ from itertools import chain
 import clipspyx
 
 from clipspyx.modules import Module
-from clipspyx.common import PutSlotError, PUT_SLOT_ERROR
+from clipspyx.common import PutSlotError, PUT_SLOT_ERROR, CLIPS_MAJOR
 from clipspyx.common import environment_builder, environment_modifier
 from clipspyx.common import CLIPSError, SaveMode, TemplateSlotDefaultType
 
@@ -108,6 +108,19 @@ class Fact:
         ret = lib.Retract(self._fact)
         if ret != lib.RE_NO_ERROR:
             raise CLIPSError(self._env, code=ret)
+
+
+if CLIPS_MAJOR >= 7:
+    @property
+    def _certainty_factor(self) -> int:
+        """The certainty factor of the fact (CLIPS 7.0+).
+
+        Returns a value between -100 and 100.
+
+        """
+        return lib.GetFactCertaintyFactor(self._fact)
+
+    Fact.certainty_factor = _certainty_factor
 
 
 class ImpliedFact(Fact):
@@ -182,6 +195,37 @@ class TemplateFact(Fact):
 
         if lib.FMModify(modifier) is ffi.NULL:
             raise CLIPSError(self._env, code=lib.FBError(self._env))
+
+
+if CLIPS_MAJOR >= 7:
+    def _update_slots(self, **slots):
+        """Update one or more slot values of the Fact (CLIPS 7.0+).
+
+        Unlike modify_slots, update creates a new fact with updated values
+        while keeping the original fact unchanged.
+
+        Equivalent to the CLIPS (update) command.
+
+        """
+        modifier = environment_modifier(self._env, 'fact')
+        ret = lib.FMSetFact(modifier, self._fact)
+        if ret != lib.FME_NO_ERROR:
+            raise CLIPSError(self._env, code=ret)
+
+        for slot, slot_val in slots.items():
+            value = clipspyx.values.clips_value(self._env, value=slot_val)
+
+            ret = lib.FMPutSlot(modifier, str(slot).encode(), value)
+            if ret != PutSlotError.PSE_NO_ERROR:
+                raise PUT_SLOT_ERROR[ret](slot)
+
+        fact = lib.FMUpdate(modifier)
+        if fact is ffi.NULL:
+            raise CLIPSError(self._env, code=lib.FMError(self._env))
+
+        return TemplateFact(self._env, fact)
+
+    TemplateFact.update_slots = _update_slots
 
 
 class Template:
@@ -321,6 +365,29 @@ class Template:
         """
         if not lib.Undeftemplate(self._ptr(), self._env):
             raise CLIPSError(self._env)
+
+
+if CLIPS_MAJOR >= 7:
+    def _has_supertemplate(self, other: 'Template') -> bool:
+        """True if other is a supertemplate of this template (CLIPS 7.0+)."""
+        return lib.HasSupertemplate(self._ptr(), other._ptr())
+
+    def _can_match_goal(self) -> bool:
+        """True if this template can match goals (CLIPS 7.0+)."""
+        return lib.CanMatchGoal(self._ptr())
+
+    @property
+    def _watch_goals(self) -> bool:
+        """Whether or not goal watching is enabled for this Template (CLIPS 7.0+)."""
+        return lib.DeftemplateGetWatchGoals(self._ptr())
+
+    @_watch_goals.setter
+    def _watch_goals(self, flag: bool):
+        lib.DeftemplateSetWatchGoals(self._ptr(), flag)
+
+    Template.has_supertemplate = _has_supertemplate
+    Template.can_match_goal = _can_match_goal
+    Template.watch_goals = _watch_goals
 
 
 class TemplateSlot:
@@ -624,6 +691,44 @@ class Facts:
         """
         if not lib.SaveFacts(self._env, path.encode(), mode):
             raise CLIPSError(self._env)
+
+
+if CLIPS_MAJOR >= 7:
+    def _goals(self) -> iter:
+        """Iterate over the asserted Goals (CLIPS 7.0+)."""
+        goal = lib.GetNextGoal(self._env, ffi.NULL)
+        while goal != ffi.NULL:
+            yield new_fact(self._env, goal)
+
+            goal = lib.GetNextGoal(self._env, goal)
+
+    def _find_goal(self, index: int) -> Fact:
+        """Find a Goal by its index (CLIPS 7.0+)."""
+        goal = lib.FindIndexedGoal(self._env, index)
+        if goal == ffi.NULL:
+            raise LookupError("Goal with index %d not found" % index)
+
+        return new_fact(self._env, goal)
+
+    def _retract_all_goals(self):
+        """Retract all Goals (CLIPS 7.0+)."""
+        ret = lib.RetractAllGoals(self._env)
+        if ret != lib.RE_NO_ERROR:
+            raise CLIPSError(self._env, code=ret)
+
+    @property
+    def _goal_list_changed(self) -> bool:
+        """Whether the goal list has changed (CLIPS 7.0+)."""
+        return lib.GetGoalListChanged(self._env)
+
+    @_goal_list_changed.setter
+    def _goal_list_changed(self, flag: bool):
+        lib.SetGoalListChanged(self._env, flag)
+
+    Facts.goals = _goals
+    Facts.find_goal = _find_goal
+    Facts.retract_all_goals = _retract_all_goals
+    Facts.goal_list_changed = _goal_list_changed
 
 
 def new_fact(env: ffi.CData, fact: ffi.CData) -> (ImpliedFact, TemplateFact):

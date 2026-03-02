@@ -136,10 +136,15 @@ ffibuilder = FFI()
 CLIPS_SOURCE = """
 #include <clips.h>
 
+const int CLIPSPYX_CLIPS_MAJOR = CLIPS_MAJOR;
+
 /* CLIPS 7.0 renamed DeftemplateGet/SetWatch -> DeftemplateGet/SetWatchFacts. */
 #if CLIPS_MAJOR >= 7
 #define DeftemplateGetWatch DeftemplateGetWatchFacts
 #define DeftemplateSetWatch DeftemplateSetWatchFacts
+
+#include "tabledef.h"
+#include "tablebsc.h"
 #endif
 
 /* Return true if the template is implied. */
@@ -147,6 +152,20 @@ bool ImpliedDeftemplate(Deftemplate *template)
 {
     return template->implied;
 }
+
+#if CLIPS_MAJOR >= 7
+/* Return the row count for a deftable. */
+unsigned long DeftableRowCount(Deftable *table)
+{
+    return table->rowCount;
+}
+
+/* Return the column count for a deftable. */
+unsigned long DeftableColumnCount(Deftable *table)
+{
+    return table->columnCount;
+}
+#endif
 
 /* User Defined Functions support. */
 static void python_function(Environment *env, UDFContext *udfc, UDFValue *out);
@@ -177,6 +196,11 @@ ffibuilder.set_source(
     extra_link_args=["-lm"])
 
 ffibuilder.cdef(CLIPS_CDEF)
+
+if clips_major >= 7:
+    cdef_70x_path = os.path.join(os.path.dirname(cdef_path), "clips-70x.cdef")
+    with open(cdef_70x_path) as cdef_70x_file:
+        ffibuilder.cdef(cdef_70x_file.read())
 
 if __name__ == "__main__":
     ffibuilder.compile(verbose=True)
