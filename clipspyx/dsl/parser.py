@@ -50,13 +50,18 @@ def parse_rule(cls) -> RuleDef:
     # CEs that scope their variables (not visible on RHS)
     _SCOPED_CES = (NotCE, ExistsCE, ForallCE)
 
+    # Track last CE for attaching descriptions from standalone strings
+    last_ce = None
+
     for stmt in class_def.body.body:
         # Skip __action__ method
         if isinstance(stmt, cst.FunctionDef):
             continue
 
-        # __salience__ = N
         if isinstance(stmt, cst.SimpleStatementLine):
+            # Extract inline comment as CE label
+            comment_label = _extract_comment(stmt)
+
             for item in stmt.body:
                 if isinstance(item, cst.Assign):
                     ce_vars = set()
@@ -64,15 +69,27 @@ def parse_rule(cls) -> RuleDef:
                     if result == '__salience__':
                         salience = _extract_int(item.value)
                     elif result is not None:
+                        if comment_label:
+                            result.label = comment_label
                         conditions.append(result)
+                        last_ce = result
                         all_vars.update(ce_vars)
                         # Assigned patterns are always RHS-visible
                         rhs_vars.update(ce_vars)
                 elif isinstance(item, cst.Expr):
+                    # Standalone string -> description for previous CE
+                    if (_is_standalone_string(item.value)
+                            and last_ce is not None):
+                        last_ce.description = _extract_string(item.value)
+                        continue
+
                     ce_vars = set()
                     result = _process_expr(item.value, ce_vars)
                     if result is not None:
+                        if comment_label:
+                            result.label = comment_label
                         conditions.append(result)
+                        last_ce = result
                         all_vars.update(ce_vars)
                         if not isinstance(result, _SCOPED_CES):
                             rhs_vars.update(ce_vars)
@@ -109,7 +126,8 @@ def _process_assign(node, bound_vars, pattern_vars):
         if _is_template_call(call):
             pattern = _parse_call_to_pattern(call, bound_vars)
             pattern_vars.append(target_name)
-            return AssignedPatternCE(var_name=target_name, pattern=pattern)
+            return AssignedPatternCE(
+                var_name=target_name, pattern=pattern)
 
     return None
 
@@ -162,6 +180,20 @@ def _is_template_call(node) -> bool:
     if isinstance(node.func, cst.Name):
         return node.func.value in _template_registry
     return False
+
+
+def _extract_comment(stmt) -> str | None:
+    """Extract inline comment text from a SimpleStatementLine."""
+    tw = stmt.trailing_whitespace
+    if hasattr(tw, 'comment') and tw.comment is not None:
+        return tw.comment.value.lstrip('#').strip()
+    return None
+
+
+def _is_standalone_string(node) -> bool:
+    """Check if a CST node is a string literal (standalone docstring)."""
+    return isinstance(node, (cst.SimpleString, cst.ConcatenatedString,
+                             cst.FormattedString))
 
 
 def _is_ce_wrapper(node) -> bool:

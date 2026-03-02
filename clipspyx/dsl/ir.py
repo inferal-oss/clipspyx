@@ -93,6 +93,8 @@ class SlotConstraint:
 class PatternCE:
     template_name: str
     slots: list[SlotConstraint] = field(default_factory=list)
+    label: str | None = None
+    description: str | None = None
 
     def to_clips(self) -> str:
         if self.slots:
@@ -105,6 +107,8 @@ class PatternCE:
 class AssignedPatternCE:
     var_name: str
     pattern: PatternCE
+    label: str | None = None
+    description: str | None = None
 
     def to_clips(self) -> str:
         return f'?{self.var_name} <- {self.pattern.to_clips()}'
@@ -114,6 +118,8 @@ class AssignedPatternCE:
 class TestCE:
     __test__ = False  # prevent pytest collection
     clips_expr: str
+    label: str | None = None
+    description: str | None = None
 
     def to_clips(self) -> str:
         return f'(test ({self.clips_expr}))'
@@ -122,6 +128,8 @@ class TestCE:
 @dataclass
 class NotCE:
     pattern: PatternCE
+    label: str | None = None
+    description: str | None = None
 
     def to_clips(self) -> str:
         return f'(not {self.pattern.to_clips()})'
@@ -130,6 +138,8 @@ class NotCE:
 @dataclass
 class OrCE:
     alternatives: list
+    label: str | None = None
+    description: str | None = None
 
     def to_clips(self) -> str:
         alts = ' '.join(a.to_clips() for a in self.alternatives)
@@ -139,6 +149,8 @@ class OrCE:
 @dataclass
 class ExistsCE:
     elements: list
+    label: str | None = None
+    description: str | None = None
 
     def to_clips(self) -> str:
         elems = ' '.join(e.to_clips() for e in self.elements)
@@ -149,6 +161,8 @@ class ExistsCE:
 class ForallCE:
     initial: PatternCE
     conditions: list
+    label: str | None = None
+    description: str | None = None
 
     def to_clips(self) -> str:
         parts = [self.initial.to_clips()]
@@ -159,6 +173,8 @@ class ForallCE:
 @dataclass
 class LogicalCE:
     elements: list
+    label: str | None = None
+    description: str | None = None
 
     def to_clips(self) -> str:
         elems = ' '.join(e.to_clips() for e in self.elements)
@@ -168,6 +184,8 @@ class LogicalCE:
 @dataclass
 class GoalCE:
     pattern: PatternCE
+    label: str | None = None
+    description: str | None = None
 
     def to_clips(self) -> str:
         return f'(goal {self.pattern.to_clips()})'
@@ -176,6 +194,8 @@ class GoalCE:
 @dataclass
 class ExplicitCE:
     pattern: PatternCE
+    label: str | None = None
+    description: str | None = None
 
     def to_clips(self) -> str:
         return f'(explicit {self.pattern.to_clips()})'

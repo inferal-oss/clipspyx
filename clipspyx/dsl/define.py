@@ -65,9 +65,12 @@ def define(env, cls):
         raise TypeError(f"{cls.__name__} is not a DSL template or rule")
 
     if isinstance(dsl_def, TemplateDef):
-        return _define_template(env, cls, dsl_def)
+        result = _define_template(env, cls, dsl_def)
+        env._dsl_defs.append(cls)
+        return result
     elif isinstance(dsl_def, RuleDef):
         _define_rule(env, cls, dsl_def)
+        env._dsl_defs.append(cls)
     else:
         raise TypeError(f"Unknown DSL definition type: {type(dsl_def).__name__}")
 

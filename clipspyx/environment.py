@@ -52,12 +52,14 @@ class Environment:
 
     __slots__ = ('_env', '_facts', '_agenda', '_classes',
                  '_modules', '_functions', '_routers', '_tables',
-                 '_namespaces')
+                 '_namespaces', '_dsl_defs')
 
     def __init__(self):
         self._env = lib.CreateEnvironment()
 
         initialize_environment_data(self._env)
+
+        self._dsl_defs = []
 
         self._facts = Facts(self._env)
         self._agenda = Agenda(self._env)
@@ -197,6 +199,24 @@ class Environment:
         from clipspyx.dsl.define import define as dsl_define
         return dsl_define(self, cls)
 
+    def visualize(self, output=None, layout='elk', group_by_kind=False):
+        """Generate a D2 diagram of defined DSL templates and rules.
+
+        Returns the D2 text as a string. If *output* is given, renders the
+        diagram to that file path via the ``d2`` CLI (requires d2 installed).
+
+        *layout* selects the D2 layout engine (default ``'elk'``).
+
+        When *group_by_kind* is ``True``, templates and rules are placed in
+        separate sub-containers within each module.
+
+        """
+        from clipspyx.dsl.visualize import generate_d2, render_d2
+        d2_text = generate_d2(self._dsl_defs, group_by_kind=group_by_kind)
+        if output is not None:
+            render_d2(d2_text, output, layout=layout)
+        return d2_text
+
     def clear(self):
         """Clear the CLIPS environment.
 
@@ -205,3 +225,4 @@ class Environment:
         """
         if not lib.Clear(self._env):
             raise CLIPSError(self._env)
+        self._dsl_defs = []

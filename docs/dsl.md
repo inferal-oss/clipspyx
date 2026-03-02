@@ -458,6 +458,165 @@ In Python code, you always use the bare class name (`Person`). The qualified
 name is only visible in CLIPS constructs (deftemplate, defrule strings) and when
 inspecting the IR via `cls.__clipspyx_dsl__.name`.
 
+## Annotations
+
+Templates, rules, and individual CEs can carry human-readable annotations.
+These serve two purposes: they appear in generated diagrams (see
+[Visualization](#visualization)), and they are accessible programmatically
+through the IR for tooling and introspection.
+
+### Template docstrings
+
+A docstring on a `Template` subclass describes what the template represents.
+In diagrams it renders as a cloud note connected to the template node.
+
+```python
+class Employee(Template):
+    """An employee in the organization."""
+    name: str
+    title: str
+    years: int = 0
+```
+
+Accessible via `Employee.__doc__`.
+
+### Rule docstrings
+
+A docstring on a `Rule` subclass describes the rule's intent. In diagrams it
+renders as a cloud note connected to the rule node.
+
+```python
+class PromoteEmployee(Rule):
+    """Promote employees with enough experience."""
+    e = Employee(name=name, years=years)
+    years >= 10
+
+    def __action__(self):
+        print(f"Consider promoting {self.name}")
+```
+
+Accessible via `PromoteEmployee.__doc__`.
+
+### CE labels
+
+An inline comment on a CE statement gives it a short name. Without a comment,
+CEs are labeled `ce0`, `ce1`, etc. in diagrams.
+
+```python
+class AssignProject(Rule):
+    e = Employee(name=name)
+    Skill(name=skill, proficiency=prof)             # has_skill
+    Project(name=proj, required_skill=skill)        # needs_skill
+    prof >= min_prof                                # qualified
+    ~Employee(name="fired")                         # not_fired
+
+    def __action__(self):
+        ...
+```
+
+Labels apply to any CE type: patterns, tests, not, or, exists, forall,
+logical.
+
+Assigned patterns (`p = Person(...)`) use the variable name as the default
+label. A comment overrides it:
+
+```python
+class R(Rule):
+    p = Person(name=name)
+    q = Person(name=name)  # partner
+```
+
+Here `p` has no comment, so its label defaults to the variable name `p`.
+The second pattern has `# partner`, so its label is `partner` instead of `q`.
+
+Accessible in the IR via `ce.label`:
+
+```python
+dsl_def = AssignProject.__clipspyx_dsl__
+dsl_def.conditions[1].label  # "has_skill"
+dsl_def.conditions[3].label  # "qualified"
+```
+
+### CE descriptions
+
+A standalone string literal on the line after a CE attaches a longer
+description. This does not affect CLIPS code generation; it is metadata for
+documentation and tooling.
+
+```python
+class AssignProject(Rule):
+    Skill(name=skill, proficiency=prof)  # has_skill
+    """Employee must have the required skill at sufficient proficiency"""
+    Project(name=proj, required_skill=skill)  # needs_skill
+    """Project defines which skill is needed and the minimum bar"""
+    prof >= min_prof  # qualified
+
+    def __action__(self):
+        ...
+```
+
+The string attaches to the CE immediately above it. A CE can have both a label
+(from the comment) and a description (from the string), or either one alone.
+
+Accessible in the IR via `ce.description`:
+
+```python
+dsl_def = AssignProject.__clipspyx_dsl__
+dsl_def.conditions[0].description
+# "Employee must have the required skill at sufficient proficiency"
+```
+
+### Summary
+
+| Construct | Annotation | Syntax | IR access |
+|-----------|-----------|--------|-----------|
+| Template | Docstring | `"""..."""` under class line | `cls.__doc__` |
+| Rule | Docstring | `"""..."""` under class line | `cls.__doc__` |
+| CE | Label | `# name` inline comment | `ce.label` |
+| CE | Description | `"""..."""` on next line | `ce.description` |
+
+## Visualization
+
+After defining templates and rules, generate a visual overview with
+`env.visualize()`. It produces a [D2](https://d2lang.com) diagram.
+
+```python
+env = Environment()
+env.define(Person)
+env.define(Department)
+env.define(GreetAdult)
+
+# Get D2 text (always works, no dependencies)
+d2_text = env.visualize()
+print(d2_text)
+
+# Render to SVG (requires d2 CLI installed)
+env.visualize(output="schema.svg")
+
+# Use a different layout engine (default is 'elk')
+env.visualize(output="schema.svg", layout="dagre")
+```
+
+The diagram includes:
+
+- **Templates** as blue `sql_table` shapes with slot rows (name, type, default)
+- **Rules** as purple `sql_table` shapes with CE rows, bound variables, and
+  salience
+- **Edges** from rules to templates they match, annotated with CE type (not,
+  or, exists, forall, logical) and matched slot names
+- **Fact-address edges** (dashed) between templates that reference each other
+- **Docstring notes** as cloud shapes connected to templates and rules
+- **CE descriptions** as page shapes connected to individual CE rows
+- **CE labels** as row keys in rule tables (from inline comments or variable
+  names; falls back to `ce0`, `ce1`, ...)
+- **Module grouping**: constructs grouped into D2 containers by Python module
+
+The default layout engine is [ELK](https://www.eclipse.org/elk/), which
+produces cleaner layouts for complex diagrams. Pass `layout="dagre"` to use
+the dagre engine instead.
+
+See `examples/hr_system.py` for a complete example.
+
 ## Limitations
 
 - **Source must be in a file.** The parser uses `inspect.getsource()`, so rules
