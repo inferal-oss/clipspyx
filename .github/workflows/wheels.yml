@@ -40,7 +40,7 @@ jobs:
           # Install the built wheels into the system Python (set up by setup-python)
           uv pip install --system dist/clipspyx_ffi-*.whl
           uv pip install --system dist/clipspyx_ffi_${{ matrix.variant }}-*.whl
-          uv pip install --system .
+          uv pip install --system ".[dsl]"
           uv pip install --system pytest
 
           # Run tests from a temp directory to ensure we test the installed package
