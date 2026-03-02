@@ -19,8 +19,11 @@ clips_src = resolve_clips_source(default_branch="clips-70x")
 # hashTableSize and dereferences the garbage hashTable pointer.
 #
 # See patches/bload-init-hashmap.patch for the canonical diff.
-# We try git apply first; if that fails (e.g. CRLF mismatch on Windows),
-# fall back to a Python-based patcher.
+# We try git apply first; if that fails, fall back to a Python-based
+# patcher.  The .gitattributes file forces *.patch to LF line endings,
+# which resolved the original Windows failure ("corrupt patch at line 14"
+# caused by CRLF conversion).  The fallback remains as insurance for
+# environments where .gitattributes is not honored (e.g. source archives).
 # ---------------------------------------------------------------------------
 
 _SENTINEL = "theHeader->itemCount = 0;"
