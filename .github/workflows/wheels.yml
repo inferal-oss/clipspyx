@@ -52,6 +52,31 @@ jobs:
           name: wheels-${{ matrix.variant }}-${{ matrix.os }}-py${{ matrix.python }}
           path: dist/*.whl
 
+  auto-fetch:
+    name: auto-fetch / ${{ matrix.variant }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [64x, 70x]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # NOTE: no "Fetch CLIPS source branches" step —
+      # resolve_clips_source() must auto-fetch from origin
+
+      - uses: astral-sh/setup-uv@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Build and test (auto-fetch)
+        run: |
+          uv sync --extra ${{ matrix.variant }} --extra dsl
+          uv run pytest tests/ -v
+
   merge-artifacts:
     name: Merge wheel artifacts
     needs: build-wheels

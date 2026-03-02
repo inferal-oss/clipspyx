@@ -124,16 +124,35 @@ def resolve_clips_source(default_branch=None):
             check=True, capture_output=True, text=True,
             cwd=repo_root)
     except subprocess.CalledProcessError as e:
-        # Check if branch exists
+        # Check if branch exists locally
         result = subprocess.run(
             ["git", "branch", "--list", branch],
             capture_output=True, text=True, cwd=repo_root)
         if not result.stdout.strip():
-            print(
-                f"Error: Branch '{branch}' not found.\n"
-                f"Run: ./scripts/sync-svn.sh 64x\n"
-                f"Or set CLIPS_SOURCE_DIR to point to CLIPS source.",
-                file=sys.stderr)
+            # Branch missing locally — try fetching from origin
+            # (common when installed as a git dependency: uv only clones the default branch)
+            print(f"  Branch '{branch}' not found locally, fetching from origin...")
+            fetch = subprocess.run(
+                ["git", "fetch", "origin", f"{branch}:{branch}"],
+                capture_output=True, text=True, cwd=repo_root)
+            if fetch.returncode == 0:
+                print(f"  Fetched '{branch}' from origin")
+                try:
+                    subprocess.run(
+                        ["git", "worktree", "add", checkout_dir, branch],
+                        check=True, capture_output=True, text=True,
+                        cwd=repo_root)
+                    return checkout_dir
+                except subprocess.CalledProcessError as e2:
+                    raise FileNotFoundError(
+                        f"Cannot checkout CLIPS source from branch '{branch}': "
+                        f"{e2.stderr.strip()}")
+            else:
+                print(
+                    f"Error: Branch '{branch}' not found locally or on origin.\n"
+                    f"Run: ./scripts/sync-svn.sh 64x\n"
+                    f"Or set CLIPS_SOURCE_DIR to point to CLIPS source.",
+                    file=sys.stderr)
         raise FileNotFoundError(
             f"Cannot checkout CLIPS source from branch '{branch}': "
             f"{e.stderr.strip()}")
