@@ -187,6 +187,16 @@ class Environment:
         if lib.Reset(self._env):
             raise CLIPSError(self._env)
 
+    def define(self, cls):
+        """Define a DSL template or rule in this environment.
+
+        Accepts classes decorated with ``@template`` or subclassing ``Rule``
+        from ``clipspyx.dsl``.
+
+        """
+        from clipspyx.dsl.define import define as dsl_define
+        return dsl_define(self, cls)
+
     def clear(self):
         """Clear the CLIPS environment.
 

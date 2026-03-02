@@ -9,6 +9,9 @@ dependencies = []
 [project.optional-dependencies]
 64x = ["clipspyx-ffi-64x==0.1.0"]
 70x = ["clipspyx-ffi-70x==0.1.0"]
+dsl = [
+    "libcst>=1.0",
+]
 
 [build-system]
 requires = ["setuptools>=42"]
