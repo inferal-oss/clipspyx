@@ -1,0 +1,14 @@
+[project]
+name = "clipspyx-ffi-70x"
+version = "0.1.0"
+description = "CLIPS 7.0x CFFI extension for clipspyx"
+license = "BSD-3-Clause"
+requires-python = ">=3.10"
+dependencies = ["cffi>=1.0.0", "clipspyx-ffi==0.1.0"]
+
+[build-system]
+requires = ["setuptools>=42", "cffi>=1.0.0", "clipspyx-ffi==0.1.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["clipspyx_ffi_70x*"]

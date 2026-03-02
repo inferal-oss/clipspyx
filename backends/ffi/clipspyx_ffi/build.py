@@ -27,13 +27,12 @@
 # OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
 # EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-import os
-import sys
 import glob
 import hashlib
+import os
+import re
 import subprocess
-
-from cffi import FFI
+import sys
 
 
 def _subdir_for_branch(branch: str) -> str:
@@ -46,6 +45,20 @@ def _subdir_for_branch(branch: str) -> str:
     if branch.startswith(prefix):
         return branch[len(prefix):]
     return hashlib.sha256(branch.encode()).hexdigest()[:8]
+
+
+def _find_repo_root() -> str | None:
+    """Find the git repository root using git rev-parse.
+
+    Returns None if not inside a git repository.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, check=True)
+        return result.stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
 
 
 def resolve_clips_source(default_branch=None):
@@ -71,7 +84,12 @@ def resolve_clips_source(default_branch=None):
 
     # Priority 2/3/4: checkout from local orphan branch
     branch = os.environ.get("CLIPS_BRANCH", default_branch or "clips-64x")
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    repo_root = _find_repo_root()
+    if repo_root is None:
+        raise FileNotFoundError(
+            "Not inside a git repository. "
+            "Set CLIPS_SOURCE_DIR to point to CLIPS source.")
+
     base_dir = os.path.join(repo_root, ".clips-source")
     subdir = _subdir_for_branch(branch)
     checkout_dir = os.path.join(base_dir, subdir)
@@ -123,31 +141,16 @@ def resolve_clips_source(default_branch=None):
     return checkout_dir
 
 
-# Resolve CLIPS source directory
-clips_src = resolve_clips_source()
+def _detect_clips_major(clips_src: str) -> int:
+    """Detect CLIPS major version from constant.h in the source directory."""
+    constant_h = os.path.join(clips_src, "constant.h")
+    if os.path.exists(constant_h):
+        with open(constant_h) as f:
+            m = re.search(r'#define\s+VERSION_STRING\s+"(\d+)', f.read())
+            if m:
+                return int(m.group(1))
+    return 6
 
-# setuptools requires relative paths - make relative to repo root
-repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-clips_src_rel = os.path.relpath(clips_src, repo_root)
-
-# Collect all .c files from CLIPS source (as relative paths)
-clips_c_files = sorted(glob.glob(os.path.join(clips_src_rel, "*.c")))
-if not clips_c_files:
-    raise FileNotFoundError(
-        f"No .c files found in {clips_src}. "
-        f"Is this a valid CLIPS source directory?")
-
-# Detect CLIPS major version from constant.h
-clips_major = 6
-constant_h = os.path.join(clips_src, "constant.h")
-if os.path.exists(constant_h):
-    import re as _re
-    with open(constant_h) as f:
-        m = _re.search(r'#define\s+VERSION_STRING\s+"(\d+)', f.read())
-        if m:
-            clips_major = int(m.group(1))
-
-ffibuilder = FFI()
 
 CLIPS_SOURCE = """
 #include <clips.h>
@@ -195,28 +198,69 @@ int DefinePythonFunction(Environment *environment)
 }
 """
 
-# Read CFFI definitions from the .cdef file bundled in the package
-cdef_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         "clips.cdef")
-with open(cdef_path) as cdef_file:
-    CLIPS_CDEF = cdef_file.read()
 
-# Compile CLIPS source directly into the CFFI extension
-ffibuilder.set_source(
-    "clipspyx._clipspyx",
-    CLIPS_SOURCE,
-    sources=clips_c_files,
-    include_dirs=[clips_src_rel],
-    extra_compile_args=["-std=c99", "-O2", "-fno-strict-aliasing",
-                        f"-DCLIPS_MAJOR={clips_major}"],
-    extra_link_args=["-lm"])
+def make_ffibuilder(module_name="clipspyx._clipspyx",
+                    default_branch=None,
+                    cdef_dir=None):
+    """Create and configure a CFFI FFIBuilder for CLIPS.
 
-ffibuilder.cdef(CLIPS_CDEF)
+    Args:
+        module_name: Dotted module name for the compiled extension
+            (e.g. "clipspyx_ffi_64x._clipspyx").
+        default_branch: Default CLIPS source branch to use if neither
+            CLIPS_SOURCE_DIR nor CLIPS_BRANCH is set.
+        cdef_dir: Directory containing .cdef files. Defaults to this
+            package's own directory.
 
-if clips_major >= 7:
-    cdef_70x_path = os.path.join(os.path.dirname(cdef_path), "clips-70x.cdef")
-    with open(cdef_70x_path) as cdef_70x_file:
-        ffibuilder.cdef(cdef_70x_file.read())
+    Returns:
+        Configured cffi.FFI instance ready for compilation.
+    """
+    from cffi import FFI
 
-if __name__ == "__main__":
-    ffibuilder.compile(verbose=True)
+    clips_src = resolve_clips_source(default_branch)
+
+    # setuptools requires relative paths; compute relative to CWD
+    # (which is the package directory during build)
+    clips_src_rel = os.path.relpath(clips_src)
+
+    # Collect all .c files from CLIPS source (as relative paths)
+    clips_c_files = sorted(glob.glob(os.path.join(clips_src_rel, "*.c")))
+    if not clips_c_files:
+        raise FileNotFoundError(
+            f"No .c files found in {clips_src}. "
+            f"Is this a valid CLIPS source directory?")
+
+    clips_major = _detect_clips_major(clips_src)
+
+    ffibuilder = FFI()
+
+    if sys.platform == "win32":
+        extra_compile_args = [f"/DCLIPS_MAJOR={clips_major}"]
+        extra_link_args = []
+    else:
+        extra_compile_args = ["-std=c99", "-O2", "-fno-strict-aliasing",
+                              f"-DCLIPS_MAJOR={clips_major}"]
+        extra_link_args = ["-lm"]
+
+    ffibuilder.set_source(
+        module_name,
+        CLIPS_SOURCE,
+        sources=clips_c_files,
+        include_dirs=[clips_src_rel],
+        extra_compile_args=extra_compile_args,
+        extra_link_args=extra_link_args)
+
+    # Read CFFI definitions from the .cdef files
+    if cdef_dir is None:
+        cdef_dir = os.path.dirname(os.path.abspath(__file__))
+
+    cdef_path = os.path.join(cdef_dir, "clips.cdef")
+    with open(cdef_path) as cdef_file:
+        ffibuilder.cdef(cdef_file.read())
+
+    if clips_major >= 7:
+        cdef_70x_path = os.path.join(cdef_dir, "clips-70x.cdef")
+        with open(cdef_70x_path) as cdef_70x_file:
+            ffibuilder.cdef(cdef_70x_file.read())
+
+    return ffibuilder
