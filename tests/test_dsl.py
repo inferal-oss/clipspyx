@@ -549,6 +549,37 @@ class TestEndToEnd(unittest.TestCase):
         fact = PersonAssert(name='Alice', age=25)
         self.assertIsInstance(fact, TemplateFact)
 
+    def test_fact_attribute_access(self):
+        """TemplateFact slots are accessible as attributes."""
+        env = Environment()
+        PersonAssert = env.define(Person)
+        env.reset()
+
+        fact = PersonAssert(name='Alice', age=25)
+        self.assertEqual(fact.name, 'Alice')
+        self.assertEqual(fact.age, 25)
+
+    def test_fact_attribute_access_in_action(self):
+        """Bound fact-address in action supports attribute access."""
+        results = []
+
+        class InspectPerson(Rule):
+            p = Person(name=name, age=age)
+            age >= 18
+
+            def __action__(self):
+                results.append((self.p.name, self.p.age))
+
+        env = Environment()
+        PersonAssert = env.define(Person)
+        env.define(InspectPerson)
+        env.reset()
+
+        PersonAssert(name='Alice', age=25)
+        env.run()
+
+        self.assertEqual(results, [('Alice', 25)])
+
     def test_assert_via_dunder_env_kwarg(self):
         """Asserting via __env__= kwarg still works as fallback."""
         env = Environment()

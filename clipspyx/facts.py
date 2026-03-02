@@ -173,6 +173,17 @@ class TemplateFact(Fact):
             else:
                 raise error
 
+    def __getattr__(self, name):
+        if name.startswith('_'):
+            raise AttributeError(name)
+        try:
+            return slot_value(self._env, self._fact, slot=name)
+        except CLIPSError as error:
+            if error.code == lib.GSE_SLOT_NOT_FOUND_ERROR:
+                raise AttributeError(name)
+            else:
+                raise error
+
     def modify_slots(self, **slots):
         """Modify one or more slot values of the Fact.
 

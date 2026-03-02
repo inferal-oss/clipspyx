@@ -94,6 +94,27 @@ class TestFacts(unittest.TestCase):
         self.assertEqual(str(tuple(template.facts())[0]), TMPL_STR)
         self.assertEqual(str(tuple(self.env.facts())[0]), TMPL_STR)
 
+    def test_template_fact_attr_access(self):
+        """TemplateFact slots are accessible as attributes."""
+        template = self.env.find_template('template-fact')
+        fact = template.assert_fact(int=1, float=2.5, str='hello',
+                                    symbol=Symbol('world'),
+                                    multifield=(1, 2))
+
+        self.assertEqual(fact.int, 1)
+        self.assertEqual(fact.float, 2.5)
+        self.assertEqual(fact.str, 'hello')
+        self.assertEqual(fact.symbol, Symbol('world'))
+        self.assertEqual(fact.multifield, (1, 2))
+
+    def test_template_fact_attr_missing_slot(self):
+        """TemplateFact raises AttributeError for non-existent slots."""
+        template = self.env.find_template('template-fact')
+        fact = template.assert_fact(int=1, str='hello')
+
+        with self.assertRaises(AttributeError):
+            _ = fact.nonexistent
+
     def test_template_fact_errors(self):
         """TemplateFacts errors."""
         with self.assertRaises(LookupError):

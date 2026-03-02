@@ -140,6 +140,14 @@ fact = Person(name="Alice", age=25)
 # fact is a TemplateFact object
 ```
 
+The returned `TemplateFact` supports both dict-style and attribute-style access:
+
+```python
+fact["name"]   # "Alice"
+fact.name      # "Alice"
+fact.age       # 25
+```
+
 As an alternative, you can pass `__env__=` directly to the `Template` subclass:
 
 ```python
@@ -187,7 +195,8 @@ Inside `__action__`, access variables through `self`:
 def __action__(self):
     print(self.name)   # the value of ?name
     print(self.age)    # the value of ?age
-    print(self.p)      # the fact address bound to ?p
+    print(self.p)      # the TemplateFact bound to ?p
+    print(self.p.name) # attribute access on bound facts works too
 ```
 
 The CLIPS environment is also available as `self.__env__`, so actions can assert
