@@ -1,7 +1,72 @@
+import inspect
+import textwrap
 import typing
 
 from clipspyx.dsl.types import is_multi, multi_element_type, clips_type_name
 from clipspyx.dsl.ir import TemplateDef, SlotDef
+
+
+def _extract_slot_descriptions(cls) -> dict[str, str]:
+    """Parse class source to extract standalone strings after annotations.
+
+    Returns a mapping of slot name -> description string.
+    """
+    try:
+        import libcst as cst
+    except ImportError:
+        return {}
+
+    try:
+        source = inspect.getsource(cls)
+    except OSError:
+        return {}
+
+    source = textwrap.dedent(source)
+    module = cst.parse_module(source)
+
+    class_def = None
+    for stmt in module.body:
+        if isinstance(stmt, cst.ClassDef) and stmt.name.value == cls.__name__:
+            class_def = stmt
+            break
+    if class_def is None:
+        return {}
+
+    descriptions = {}
+    last_slot_name = None
+
+    for stmt in class_def.body.body:
+        if isinstance(stmt, cst.SimpleStatementLine):
+            for item in stmt.body:
+                if isinstance(item, cst.AnnAssign) and isinstance(
+                        item.target, cst.Name):
+                    last_slot_name = item.target.value
+                elif isinstance(item, cst.Expr) and isinstance(
+                        item.value,
+                        (cst.SimpleString, cst.ConcatenatedString,
+                         cst.FormattedString)):
+                    if last_slot_name is not None:
+                        raw = item.value
+                        if isinstance(raw, cst.SimpleString):
+                            descriptions[last_slot_name] = \
+                                raw.evaluated_value
+                        elif isinstance(raw, cst.ConcatenatedString):
+                            parts = []
+                            for p in raw.parts:
+                                if isinstance(p, cst.SimpleString):
+                                    parts.append(p.evaluated_value)
+                                elif hasattr(p, 'evaluated_value'):
+                                    parts.append(p.evaluated_value)
+                            descriptions[last_slot_name] = ''.join(parts)
+                        last_slot_name = None
+                        continue
+                else:
+                    last_slot_name = None
+        else:
+            last_slot_name = None
+
+    return descriptions
+
 
 def _is_template_class(annotation) -> bool:
     """Check if an annotation is a Template subclass with a TemplateDef."""
@@ -18,6 +83,7 @@ _template_registry: dict[str, type] = {}
 def _process_template_class(cls):
     """Extract type hints from *cls* and attach a TemplateDef as __clipspyx_dsl__."""
     hints = typing.get_type_hints(cls)
+    slot_descriptions = _extract_slot_descriptions(cls)
     slots = []
 
     for slot_name, annotation in hints.items():
@@ -43,6 +109,7 @@ def _process_template_class(cls):
             default=default_val if has_default else None,
             has_default=has_default,
             fact_template=fact_template,
+            description=slot_descriptions.get(slot_name),
         ))
 
     tdef = TemplateDef(name=f"{cls.__module__}.{cls.__name__}", slots=slots)

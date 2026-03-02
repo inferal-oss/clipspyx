@@ -36,6 +36,15 @@ class VizDepartment(Template):
     head: VizPerson  # fact-address slot
 
 
+class VizDocSlots(Template):
+    """Template with documented slots."""
+    name: str
+    """Full legal name of the person"""
+    age: int = 0
+    """Age in years"""
+    title: str
+
+
 # =============================================================================
 # Template D2 generation
 # =============================================================================
@@ -80,6 +89,45 @@ class TestGenerateD2Templates(unittest.TestCase):
     def test_template_fill_color(self):
         d2 = generate_d2([VizPerson])
         self.assertIn('style.fill: "#4a90d9"', d2)
+
+
+# =============================================================================
+# Slot descriptions
+# =============================================================================
+
+class TestGenerateD2SlotDescriptions(unittest.TestCase):
+    """Slot descriptions from standalone strings after annotations."""
+
+    def test_slot_description_in_ir(self):
+        dsl_def = VizDocSlots.__clipspyx_dsl__
+        slots = {s.name: s for s in dsl_def.slots}
+        self.assertEqual(slots['name'].description,
+                         'Full legal name of the person')
+        self.assertEqual(slots['age'].description, 'Age in years')
+        self.assertIsNone(slots['title'].description)
+
+    def test_slot_description_rendered_as_note(self):
+        d2 = generate_d2([VizDocSlots])
+        # Page note for documented slot
+        self.assertIn('Full legal name of the person', d2)
+        self.assertIn('shape: page', d2)
+        # Note connects to the slot row
+        self.assertIn('_name_doc -> VizDocSlots.name', d2)
+
+    def test_multiple_slot_descriptions(self):
+        d2 = generate_d2([VizDocSlots])
+        self.assertIn('Full legal name of the person', d2)
+        self.assertIn('Age in years', d2)
+        # Two page notes (name and age), not title
+        self.assertEqual(d2.count('shape: page'), 2)
+
+    def test_undocumented_slot_no_note(self):
+        d2 = generate_d2([VizDocSlots])
+        self.assertNotIn('_title_doc', d2)
+
+    def test_no_descriptions_no_notes(self):
+        d2 = generate_d2([VizPerson])
+        self.assertNotIn('shape: page', d2)
 
 
 # =============================================================================

@@ -11,6 +11,7 @@ class SlotDef:
     default: object = None
     has_default: bool = False
     fact_template: str | None = None
+    description: str | None = None
 
 
 @dataclass

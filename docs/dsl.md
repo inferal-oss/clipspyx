@@ -480,6 +480,35 @@ class Employee(Template):
 
 Accessible via `Employee.__doc__`.
 
+### Slot descriptions
+
+A standalone string literal on the line after a slot annotation attaches a
+description to that slot. This does not affect CLIPS code generation; it is
+metadata for documentation and tooling. In diagrams it renders as a page note
+connected to the slot row.
+
+```python
+class Employee(Template):
+    """An employee in the organization."""
+    name: str
+    """Full legal name"""
+    title: str
+    """Current job title"""
+    years: int = 0
+    """Years of service in the company"""
+```
+
+A slot can have a description or not; undocumented slots are unaffected.
+
+Accessible in the IR via `slot.description`:
+
+```python
+dsl_def = Employee.__clipspyx_dsl__
+slots = {s.name: s for s in dsl_def.slots}
+slots['name'].description   # "Full legal name"
+slots['years'].description  # "Years of service in the company"
+```
+
 ### Rule docstrings
 
 A docstring on a `Rule` subclass describes the rule's intent. In diagrams it
@@ -571,6 +600,7 @@ dsl_def.conditions[0].description
 | Construct | Annotation | Syntax | IR access |
 |-----------|-----------|--------|-----------|
 | Template | Docstring | `"""..."""` under class line | `cls.__doc__` |
+| Slot | Description | `"""..."""` on next line | `slot.description` |
 | Rule | Docstring | `"""..."""` under class line | `cls.__doc__` |
 | CE | Label | `# name` inline comment | `ce.label` |
 | CE | Description | `"""..."""` on next line | `ce.description` |
@@ -606,6 +636,7 @@ The diagram includes:
   or, exists, forall, logical) and matched slot names
 - **Fact-address edges** (dashed) between templates that reference each other
 - **Docstring notes** as cloud shapes connected to templates and rules
+- **Slot descriptions** as page shapes connected to individual slot rows
 - **CE descriptions** as page shapes connected to individual CE rows
 - **CE labels** as row keys in rule tables (from inline comments or variable
   names; falls back to `ce0`, `ce1`, ...)

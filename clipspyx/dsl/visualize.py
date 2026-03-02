@@ -324,6 +324,21 @@ def generate_d2(defs, group_by_kind=False):
                             f'{{style.stroke-dash: 3; style.opacity: 0.5}}'
                         )
 
+                    # Slot descriptions: individual note per slot
+                    for slot in dsl_def.slots:
+                        if not slot.description:
+                            continue
+                        doc_id = f'{node_id}_{slot.name}_doc'
+                        lines.append(
+                            f'{indent}{doc_id}: '
+                            f'"{_escape_d2(slot.description)}" {{')
+                        lines.append(f'{indent}  shape: page')
+                        lines.append(f'{indent}}}')
+                        lines.append(
+                            f'{indent}{doc_id} -> {node_id}.{slot.name}: '
+                            f'{{style.stroke-dash: 3; style.opacity: 0.5}}'
+                        )
+
                     # Fact-address edges (template -> template)
                     for slot in dsl_def.slots:
                         if (slot.fact_template

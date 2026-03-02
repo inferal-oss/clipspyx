@@ -24,27 +24,37 @@ from clipspyx.dsl import Template, Rule, Multi
 class Skill(Template):
     """A named skill with proficiency level."""
     name: str
+    """Skill identifier, e.g. 'Python' or 'SQL'"""
     proficiency: int = 1
+    """1 = beginner, 5 = expert"""
 
 
 class Employee(Template):
     """An employee in the organization."""
     name: str
+    """Full legal name"""
     title: str
+    """Current job title"""
     years: int = 0
+    """Years of service in the company"""
 
 
 class Department(Template):
     """An organizational department."""
     name: str
+    """Department name, e.g. 'Engineering'"""
     head: Employee
+    """The department head (fact-address to Employee)"""
 
 
 class Project(Template):
     """A project that requires certain skills."""
     name: str
+    """Project codename"""
     required_skill: str
+    """Skill name that team members must have"""
     min_proficiency: int = 1
+    """Minimum proficiency level required"""
 
 
 # ---------------------------------------------------------------------------
