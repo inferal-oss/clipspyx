@@ -1,21 +1,76 @@
-import glob
 import os
-import subprocess
+import re
 import sys
 
 from clipspyx_ffi.build import resolve_clips_source, make_ffibuilder
 
 clips_src = resolve_clips_source(default_branch="clips-70x")
 
-# Apply patches to the resolved CLIPS source.
-patches_dir = os.path.join(os.path.dirname(__file__), "..", "patches")
-patches_dir = os.path.normpath(patches_dir)
-for patch_file in sorted(glob.glob(os.path.join(patches_dir, "*.patch"))):
-    subprocess.run(
-        ["git", "apply", "--check", os.path.abspath(patch_file)],
-        cwd=clips_src, capture_output=True) and subprocess.run(
-        ["git", "apply", os.path.abspath(patch_file)],
-        cwd=clips_src, capture_output=True)
+
+# ---------------------------------------------------------------------------
+# Patch modulbin.c: initialize hashmap fields in UpdateDefmoduleItemHeaderHM
+#
+# CLIPS 7.0x Bload() crashes with SEGV because UpdateDefmoduleItemHeaderHM
+# does not initialize itemCount, hashTableSize, and hashTable fields of the
+# defmoduleItemHeaderHM struct.  Since genalloc does not zero memory, these
+# fields contain garbage.  When AssignHashMapSize is called it sees non-zero
+# hashTableSize and dereferences the garbage hashTable pointer.
+#
+# This patcher inserts the three missing initializations after the
+# theHeader->theModule = ModulePointer(...) line, but only inside
+# UpdateDefmoduleItemHeaderHM (NOT the similar UpdateDefmoduleItemHeader).
+# ---------------------------------------------------------------------------
+
+PATCH_LINES = (
+    "   theHeader->itemCount = 0;\n"
+    "   theHeader->hashTableSize = 0;\n"
+    "   theHeader->hashTable = NULL;\n"
+)
+
+SENTINEL = "theHeader->itemCount = 0;"
+
+
+def patch_modulbin(clips_source_dir: str) -> None:
+    """Patch modulbin.c to initialize hashmap fields in UpdateDefmoduleItemHeaderHM."""
+    path = os.path.join(clips_source_dir, "modulbin.c")
+    with open(path, "r") as f:
+        text = f.read()
+
+    # Already patched: the sentinel line is present.
+    if SENTINEL in text:
+        print(f"  modulbin.c: already patched (skipping)")
+        return
+
+    # Locate the UpdateDefmoduleItemHeaderHM function and, within it, the
+    # "theHeader->theModule = ModulePointer(...)" assignment.  We insert
+    # our three initialization lines immediately after that assignment.
+    #
+    # We match the HM variant specifically by looking for the function
+    # signature with defmoduleItemHeaderHM in it.
+    pattern = re.compile(
+        r"(void\s+UpdateDefmoduleItemHeaderHM\b"  # function name
+        r".*?"                                      # params, opening brace, locals
+        r"([ \t]*theHeader->theModule\s*=\s*ModulePointer\([^)]*\)\s*;[^\n]*\n))",  # assignment line
+        re.DOTALL,
+    )
+
+    m = pattern.search(text)
+    assert m, (
+        "Cannot find patch site in modulbin.c: expected "
+        "'UpdateDefmoduleItemHeaderHM' containing "
+        "'theHeader->theModule = ModulePointer(...)'"
+    )
+
+    insert_pos = m.end()
+    patched = text[:insert_pos] + PATCH_LINES + text[insert_pos:]
+
+    with open(path, "w") as f:
+        f.write(patched)
+
+    print(f"  modulbin.c: patched UpdateDefmoduleItemHeaderHM (hashmap init)")
+
+
+patch_modulbin(clips_src)
 
 # Link so setuptools sees sources inside the project directory.
 # Symlinks require developer mode on Windows, so use a copy instead.
