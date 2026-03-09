@@ -13,6 +13,8 @@ from clipspyx.dsl.ir import (
 
 _CE_WRAPPERS = {'exists', 'forall', 'logical', 'goal', 'explicit'}
 
+_NIL_NAMES = frozenset({'None', 'NIL'})
+
 _CMP_OPS = {
     'GreaterThan': '>',
     'LessThan': '<',
@@ -20,6 +22,8 @@ _CMP_OPS = {
     'LessThanEqual': '<=',
     'Equal': 'eq',
     'NotEqual': 'neq',
+    'Is': 'eq',
+    'IsNot': 'neq',
 }
 
 
@@ -226,6 +230,10 @@ def _parse_constraint(node, bound_vars):
     if isinstance(node, cst.Name) and node.value == '_':
         return Wildcard()
 
+    # None / NIL -> CLIPS nil
+    if isinstance(node, cst.Name) and node.value in _NIL_NAMES:
+        return Literal(value=None)
+
     # Variable: bare name
     if isinstance(node, cst.Name):
         bound_vars.add(node.value)
@@ -375,6 +383,8 @@ def _comparison_to_clips(comp_node, bound_vars) -> str:
 
 def _atom_to_clips(node, bound_vars) -> str:
     """Convert an atomic CST node to its CLIPS string representation."""
+    if isinstance(node, cst.Name) and node.value in _NIL_NAMES:
+        return 'nil'
     if isinstance(node, cst.Name):
         bound_vars.add(node.value)
         return f'?{node.value}'
@@ -433,10 +443,10 @@ def _expr_to_clips_test(node, bound_vars) -> str | None:
 
 def _find_var_in_comparison(comp_node) -> str | None:
     """Find the first variable Name in a comparison."""
-    if isinstance(comp_node.left, cst.Name):
+    if isinstance(comp_node.left, cst.Name) and comp_node.left.value not in _NIL_NAMES:
         return comp_node.left.value
     for comp in comp_node.comparisons:
-        if isinstance(comp.comparator, cst.Name):
+        if isinstance(comp.comparator, cst.Name) and comp.comparator.value not in _NIL_NAMES:
             return comp.comparator.value
     return None
 

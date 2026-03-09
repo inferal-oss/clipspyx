@@ -367,6 +367,25 @@ Person(age=25)         # (age 25)
 Person(name="Bob")     # (name "Bob")
 ```
 
+### NIL / None
+
+Python's `None` and the DSL constant `NIL` both produce the CLIPS `nil` value:
+
+```python
+Person(name=None)           # (name nil)
+Person(name=NIL)            # (name nil)
+Person(name=not None)       # (name ~nil)
+Person(name=None or "x")    # (name nil|"x")
+name is None                # (test (eq ?name nil))
+name is not None            # (test (neq ?name nil))
+```
+
+Import `NIL` from the DSL module:
+
+```python
+from clipspyx.dsl import NIL
+```
+
 ### Field-level not
 
 Python's `not` keyword negates a slot value:
@@ -432,6 +451,10 @@ Higher salience fires first.
 | `logical(Person(...))` | `(logical (mod.Person ...))` | CE: truth maintenance |
 | `goal(Person(...))` | `(goal (mod.Person ...))` | CE: backward chain (7.0x) |
 | `explicit(Person(...))` | `(explicit (mod.Person ...))` | CE: no goal gen (7.0x) |
+| `None` or `NIL` | `nil` | Field: CLIPS nil value |
+| `not None` | `~nil` | Field: slot is not nil |
+| `name is None` | `(test (eq ?name nil))` | Test CE: identity check |
+| `name is not None` | `(test (neq ?name nil))` | Test CE: identity check |
 | `not "Bob"` | `~"Bob"` | Field: slot is not this value |
 | `25 or 30 or 35` | `25\|30\|35` | Field: one of these values |
 | `x and x > 5` | `?x&:(> ?x 5)` | Field: bind + predicate |

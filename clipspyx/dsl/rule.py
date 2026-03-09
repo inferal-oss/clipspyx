@@ -66,6 +66,8 @@ class _RuleNamespace(dict):
         super().__init__()
         # Seed wildcard
         self['_'] = _Placeholder()
+        # Seed NIL as None (Python keyword None needs no seeding)
+        self['NIL'] = None
         # Seed template names as callables returning _Placeholder
         for name in _template_registry:
             self[name] = _make_ce_func()

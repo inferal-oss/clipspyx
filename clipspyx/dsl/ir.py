@@ -41,6 +41,8 @@ class Literal:
     value: object
 
     def to_clips(self) -> str:
+        if self.value is None:
+            return 'nil'
         if isinstance(self.value, str):
             return f'"{self.value}"'
         return str(self.value)

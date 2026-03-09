@@ -2,7 +2,8 @@ import unittest
 
 from clipspyx import Environment, TemplateFact
 from clipspyx.common import CLIPS_MAJOR
-from clipspyx.dsl import Template, Rule, Multi
+from clipspyx.dsl import Template, Rule, Multi, NIL
+from clipspyx.values import Symbol
 from clipspyx.dsl.types import clips_type_name, is_multi, multi_element_type
 from clipspyx.dsl.ir import (
     TemplateDef, SlotDef, PatternCE, AssignedPatternCE, TestCE,
@@ -262,6 +263,92 @@ class TestRuleParsing(unittest.TestCase):
         self.assertEqual(constraint.var, 'age')
         self.assertIn('>', constraint.clips_expr)
 
+    def test_none_literal(self):
+        class R(Rule):
+            Person(name=None)
+            def __action__(self):
+                pass
+
+        rd = R.__clipspyx_dsl__
+        ce = rd.conditions[0]
+        constraint = ce.slots[0].constraint
+        self.assertIsInstance(constraint, Literal)
+        self.assertIsNone(constraint.value)
+
+    def test_nil_literal(self):
+        class R(Rule):
+            Person(name=NIL)
+            def __action__(self):
+                pass
+
+        rd = R.__clipspyx_dsl__
+        ce = rd.conditions[0]
+        constraint = ce.slots[0].constraint
+        self.assertIsInstance(constraint, Literal)
+        self.assertIsNone(constraint.value)
+
+    def test_not_none(self):
+        class R(Rule):
+            Person(name=not None)
+            def __action__(self):
+                pass
+
+        rd = R.__clipspyx_dsl__
+        ce = rd.conditions[0]
+        constraint = ce.slots[0].constraint
+        self.assertIsInstance(constraint, NotConstraint)
+        self.assertIsInstance(constraint.inner, Literal)
+        self.assertIsNone(constraint.inner.value)
+
+    def test_none_not_in_bound_vars(self):
+        class R(Rule):
+            Person(name=None)
+            def __action__(self):
+                pass
+
+        rd = R.__clipspyx_dsl__
+        self.assertNotIn('None', rd.bound_vars)
+        self.assertNotIn('NIL', rd.bound_vars)
+
+    def test_nil_not_in_bound_vars(self):
+        class R(Rule):
+            Person(name=NIL)
+            def __action__(self):
+                pass
+
+        rd = R.__clipspyx_dsl__
+        self.assertNotIn('None', rd.bound_vars)
+        self.assertNotIn('NIL', rd.bound_vars)
+
+    def test_none_or_constraint(self):
+        class R(Rule):
+            Person(name=None or "x")
+            def __action__(self):
+                pass
+
+        rd = R.__clipspyx_dsl__
+        ce = rd.conditions[0]
+        constraint = ce.slots[0].constraint
+        self.assertIsInstance(constraint, OrConstraint)
+        self.assertEqual(len(constraint.alternatives), 2)
+        self.assertIsInstance(constraint.alternatives[0], Literal)
+        self.assertIsNone(constraint.alternatives[0].value)
+        self.assertIsInstance(constraint.alternatives[1], Literal)
+        self.assertEqual(constraint.alternatives[1].value, 'x')
+
+    def test_not_nil(self):
+        class R(Rule):
+            Person(name=not NIL)
+            def __action__(self):
+                pass
+
+        rd = R.__clipspyx_dsl__
+        ce = rd.conditions[0]
+        constraint = ce.slots[0].constraint
+        self.assertIsInstance(constraint, NotConstraint)
+        self.assertIsInstance(constraint.inner, Literal)
+        self.assertIsNone(constraint.inner.value)
+
     def test_exists_ce(self):
         class R(Rule):
             exists(Person())
@@ -436,6 +523,91 @@ class TestCodegen(unittest.TestCase):
 
         result = generate_defrule(R.__clipspyx_dsl__)
         self.assertIn('?age&:(>= ?age 18)', result)
+
+    def test_defrule_none_literal(self):
+        class R(Rule):
+            Person(name=None)
+            def __action__(self):
+                pass
+
+        result = generate_defrule(R.__clipspyx_dsl__)
+        self.assertIn('(name nil)', result)
+        self.assertNotIn('?None', result)
+
+    def test_defrule_nil_literal(self):
+        class R(Rule):
+            Person(name=NIL)
+            def __action__(self):
+                pass
+
+        result = generate_defrule(R.__clipspyx_dsl__)
+        self.assertIn('(name nil)', result)
+
+    def test_defrule_not_none(self):
+        class R(Rule):
+            Person(name=not None)
+            def __action__(self):
+                pass
+
+        result = generate_defrule(R.__clipspyx_dsl__)
+        self.assertIn('(name ~nil)', result)
+
+    def test_defrule_test_ce_eq_none(self):
+        class R(Rule):
+            Person(name=name)
+            name == None
+            def __action__(self):
+                pass
+
+        result = generate_defrule(R.__clipspyx_dsl__)
+        self.assertIn('eq ?name nil', result)
+
+    def test_defrule_test_ce_is_none(self):
+        class R(Rule):
+            Person(name=name)
+            name is None
+            def __action__(self):
+                pass
+
+        result = generate_defrule(R.__clipspyx_dsl__)
+        self.assertIn('eq ?name nil', result)
+
+    def test_defrule_test_ce_is_not_none(self):
+        class R(Rule):
+            Person(name=name)
+            name is not None
+            def __action__(self):
+                pass
+
+        result = generate_defrule(R.__clipspyx_dsl__)
+        self.assertIn('neq ?name nil', result)
+
+    def test_defrule_none_or_literal(self):
+        class R(Rule):
+            Person(name=None or "x")
+            def __action__(self):
+                pass
+
+        result = generate_defrule(R.__clipspyx_dsl__)
+        self.assertIn('(name nil|"x")', result)
+
+    def test_defrule_not_nil(self):
+        class R(Rule):
+            Person(name=not NIL)
+            def __action__(self):
+                pass
+
+        result = generate_defrule(R.__clipspyx_dsl__)
+        self.assertIn('(name ~nil)', result)
+
+    def test_defrule_predicate_neq_none(self):
+        class R(Rule):
+            Person(name=name and name != None)
+            def __action__(self):
+                pass
+
+        result = generate_defrule(R.__clipspyx_dsl__)
+        self.assertIn('neq ?name nil', result)
 
     def test_defrule_exists(self):
         class R(Rule):
@@ -859,6 +1031,56 @@ class TestEndToEnd(unittest.TestCase):
         env.run()
 
         self.assertEqual(results, ['Alice'])
+
+    def test_nil_slot_matching(self):
+        """Rule with None constraint fires for fact with nil-valued SYMBOL slot."""
+        results = []
+
+        class Tag(Template):
+            label: Symbol
+
+        class MatchNilLabel(Rule):
+            Tag(label=None)
+
+            def __action__(self):
+                results.append('nil_matched')
+
+        env = Environment()
+        TagAssert = env.define(Tag)
+        env.define(MatchNilLabel)
+        env.reset()
+
+        TagAssert()  # label defaults to nil (SYMBOL slot)
+        TagAssert(label=Symbol('hello'))
+        env.run()
+
+        self.assertIn('nil_matched', results)
+        self.assertEqual(len(results), 1)
+
+    def test_is_not_none_constraint(self):
+        """Rule with `name is not None` test CE fires for non-nil facts only."""
+        results = []
+
+        class Tag(Template):
+            label: Symbol
+
+        class MatchNotNilLabel(Rule):
+            Tag(label=label)
+            label is not None
+
+            def __action__(self):
+                results.append(str(self.label))
+
+        env = Environment()
+        TagAssert = env.define(Tag)
+        env.define(MatchNotNilLabel)
+        env.reset()
+
+        TagAssert()  # nil label - should not fire
+        TagAssert(label=Symbol('hello'))
+        env.run()
+
+        self.assertEqual(results, ['hello'])
 
     def test_action_receives_env(self):
         """__action__ can access the environment via self.__env__."""
