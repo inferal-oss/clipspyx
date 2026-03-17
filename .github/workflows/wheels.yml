@@ -62,6 +62,17 @@ jobs:
       - name: Build wheels
         run: uv run scripts/build-backend.py ${{ matrix.variant }}
 
+      - name: Repair Linux wheels
+        if: runner.os == 'Linux'
+        run: |
+          uv pip install --system auditwheel patchelf
+          mkdir -p dist-repaired
+          for whl in dist/*linux*.whl; do
+            auditwheel repair "$whl" -w dist-repaired/
+          done
+          rm dist/*linux*.whl
+          mv dist-repaired/*.whl dist/
+
       - name: Install and test
         shell: bash
         run: |
