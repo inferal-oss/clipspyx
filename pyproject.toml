@@ -2,9 +2,15 @@
 name = "clipspyx"
 version = "0.1.0"
 description = "CLIPS Python bindings via CFFI"
+readme = "README.md"
 license = "BSD-3-Clause"
 requires-python = ">=3.10"
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/inferal-oss/clipspyx"
+Repository = "https://github.com/inferal-oss/clipspyx"
+Issues = "https://github.com/inferal-oss/clipspyx/issues"
 
 [project.optional-dependencies]
 64x = ["clipspyx-ffi-64x==0.1.0"]
