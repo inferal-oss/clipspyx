@@ -112,7 +112,8 @@ def _process_template_class(cls):
             description=slot_descriptions.get(slot_name),
         ))
 
-    tdef = TemplateDef(name=f"{cls.__module__}.{cls.__name__}", slots=slots)
+    clips_name = getattr(cls, '__clips_name__', f"{cls.__module__}.{cls.__name__}")
+    tdef = TemplateDef(name=clips_name, slots=slots)
     cls.__clipspyx_dsl__ = tdef
 
     _template_registry[cls.__name__] = cls

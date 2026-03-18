@@ -251,6 +251,16 @@ def _parse_constraint(node, bound_vars):
     if isinstance(node, (cst.SimpleString, cst.FormattedString, cst.ConcatenatedString)):
         return Literal(value=_extract_string(node))
 
+    # Symbol("...") -> CLIPS symbol (unquoted)
+    if (isinstance(node, cst.Call)
+            and isinstance(node.func, cst.Name)
+            and node.func.value == 'Symbol'
+            and node.args
+            and isinstance(node.args[0].value,
+                           (cst.SimpleString, cst.ConcatenatedString))):
+        from clipspyx.values import Symbol
+        return Literal(value=Symbol(_extract_string(node.args[0].value)))
+
     # Negated number: -5, -3.14
     if (isinstance(node, cst.UnaryOperation)
             and isinstance(node.operator, cst.Minus)):

@@ -177,6 +177,18 @@ class TestRuleParsing(unittest.TestCase):
         self.assertIsInstance(ce.slots[0].constraint, Literal)
         self.assertEqual(ce.slots[0].constraint.value, 'Bob')
 
+    def test_symbol_literal(self):
+        class R(Rule):
+            Person(name=Symbol("Bob"))
+            def __action__(self):
+                pass
+
+        rd = R.__clipspyx_dsl__
+        ce = rd.conditions[0]
+        self.assertIsInstance(ce.slots[0].constraint, Literal)
+        self.assertIsInstance(ce.slots[0].constraint.value, Symbol)
+        self.assertEqual(ce.slots[0].constraint.value, 'Bob')
+
     def test_test_ce(self):
         class R(Rule):
             Person(name=name, age=age)
@@ -533,6 +545,17 @@ class TestCodegen(unittest.TestCase):
         result = generate_defrule(R.__clipspyx_dsl__)
         self.assertIn('(name nil)', result)
         self.assertNotIn('?None', result)
+
+    def test_defrule_symbol_literal(self):
+        class R(Rule):
+            Person(name=Symbol("Bob"))
+            def __action__(self):
+                pass
+
+        result = generate_defrule(R.__clipspyx_dsl__)
+        # Symbol produces unquoted value, string would produce "Bob"
+        self.assertIn('(name Bob)', result)
+        self.assertNotIn('"Bob"', result)
 
     def test_defrule_nil_literal(self):
         class R(Rule):
@@ -1056,6 +1079,30 @@ class TestEndToEnd(unittest.TestCase):
 
         self.assertIn('nil_matched', results)
         self.assertEqual(len(results), 1)
+
+    def test_symbol_literal_matching(self):
+        """Rule with Symbol constraint fires only for matching symbol value."""
+        results = []
+
+        class Tag(Template):
+            label: Symbol
+
+        class MatchHello(Rule):
+            Tag(label=Symbol("hello"))
+
+            def __action__(self):
+                results.append('matched')
+
+        env = Environment()
+        TagAssert = env.define(Tag)
+        env.define(MatchHello)
+        env.reset()
+
+        TagAssert(label=Symbol('hello'))
+        TagAssert(label=Symbol('world'))
+        env.run()
+
+        self.assertEqual(results, ['matched'])
 
     def test_is_not_none_constraint(self):
         """Rule with `name is not None` test CE fires for non-nil facts only."""

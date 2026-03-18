@@ -87,6 +87,9 @@ class Environment:
         self._namespaces = {m: n for n in namespaces
                             for m in dir(n) if not m.startswith('_')}
 
+        from clipspyx.meta import enable_meta_templates
+        enable_meta_templates(self)
+
     def __del__(self):
         try:
             delete_environment_data(self._env)

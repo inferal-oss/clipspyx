@@ -74,6 +74,8 @@ class _RuleNamespace(dict):
         # Seed CE wrapper functions
         for ce_name in ('exists', 'forall', 'logical', 'goal', 'explicit'):
             self[ce_name] = _make_ce_func()
+        # Seed Symbol as a callable returning _Placeholder
+        self['Symbol'] = _make_ce_func()
 
     def __missing__(self, key):
         if key.startswith('_'):

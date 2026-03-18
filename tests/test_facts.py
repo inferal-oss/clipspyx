@@ -235,7 +235,7 @@ class TestFacts(unittest.TestCase):
         deffacts = self.env.find_defined_facts('defined-facts')
         listed = list(self.env.defined_facts())
 
-        self.assertEqual(deffacts, listed[0])
+        self.assertIn(deffacts, listed)
         self.assertEqual(deffacts.name, 'defined-facts')
         self.assertEqual(
             str(deffacts),

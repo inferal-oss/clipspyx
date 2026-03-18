@@ -1,5 +1,7 @@
 from dataclasses import dataclass, field
 
+from clipspyx.values import Symbol
+
 
 # --- Template IR ---
 
@@ -43,6 +45,8 @@ class Literal:
     def to_clips(self) -> str:
         if self.value is None:
             return 'nil'
+        if isinstance(self.value, Symbol):
+            return str(self.value)
         if isinstance(self.value, str):
             return f'"{self.value}"'
         return str(self.value)
