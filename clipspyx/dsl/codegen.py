@@ -33,13 +33,18 @@ def generate_defrule(rdef: RuleDef) -> str:
 
     lines.append('  =>')
 
-    # Build RHS: call the bridge deffunction with bound vars
-    arg_names = _build_arg_list(rdef)
-    if arg_names:
-        args_str = ' '.join(f'?{n}' for n in arg_names)
-        lines.append(f'  ({rdef.action_func_name} {args_str})')
+    if rdef.effects:
+        # Native CLIPS RHS: emit effect actions directly
+        for effect in rdef.effects:
+            lines.append(f'  {effect.to_clips()}')
     else:
-        lines.append(f'  ({rdef.action_func_name})')
+        # Build RHS: call the bridge deffunction with bound vars
+        arg_names = _build_arg_list(rdef)
+        if arg_names:
+            args_str = ' '.join(f'?{n}' for n in arg_names)
+            lines.append(f'  ({rdef.action_func_name} {args_str})')
+        else:
+            lines.append(f'  ({rdef.action_func_name})')
 
     lines.append(')')
     return '\n'.join(lines)

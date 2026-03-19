@@ -74,6 +74,9 @@ class _RuleNamespace(dict):
         # Seed CE wrapper functions
         for ce_name in ('exists', 'forall', 'logical', 'goal', 'explicit'):
             self[ce_name] = _make_ce_func()
+        # Seed effect functions
+        for eff_name in ('asserts', 'retracts', 'modifies'):
+            self[eff_name] = _make_ce_func()
         # Seed Symbol as a callable returning _Placeholder
         self['Symbol'] = _make_ce_func()
 
@@ -122,6 +125,12 @@ class _RuleMeta(type):
             # Lazy parse: done when define() is called, or eagerly here
             from clipspyx.dsl.parser import parse_rule
             cls.__clipspyx_dsl__ = parse_rule(cls)
+
+            # Mutual exclusivity: effects and __action__ cannot coexist
+            if cls.__clipspyx_dsl__.effects and cls.__clipspyx_action__ is not None:
+                raise TypeError(
+                    f"Rule {name} cannot define both effects "
+                    f"(asserts/retracts/modifies) and __action__")
 
         return cls
 

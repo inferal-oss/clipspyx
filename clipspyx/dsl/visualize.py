@@ -5,6 +5,7 @@ from clipspyx.dsl.ir import (
     TemplateDef, RuleDef, PatternCE, AssignedPatternCE,
     NotCE, OrCE, ExistsCE, ForallCE, LogicalCE, GoalCE, ExplicitCE,
     TestCE,
+    AssertEffect, RetractEffect, ModifyEffect,
 )
 
 
@@ -127,6 +128,32 @@ def _ce_summary(ce):
     elif isinstance(ce, ExplicitCE):
         return f'explicit({_pattern_summary(ce.pattern)})'
     return '?'
+
+
+def _effect_summary(effect):
+    """Build a one-line human-readable summary of an effect."""
+    if isinstance(effect, AssertEffect):
+        short = _short_template(effect.template_name)
+        if effect.slots:
+            slots = ', '.join(s.name for s in effect.slots)
+            return f'assert {short}({slots})'
+        return f'assert {short}()'
+    elif isinstance(effect, RetractEffect):
+        return f'retract {effect.var_name}'
+    elif isinstance(effect, ModifyEffect):
+        if effect.slots:
+            slots = ', '.join(s.name for s in effect.slots)
+            return f'modify {effect.var_name}({slots})'
+        return f'modify {effect.var_name}'
+    return '?'
+
+
+def _resolve_pattern_var_template(rdef, var_name):
+    """Map a pattern variable name to its template name, if any."""
+    for ce in rdef.conditions:
+        if isinstance(ce, AssignedPatternCE) and ce.var_name == var_name:
+            return ce.pattern.template_name
+    return None
 
 
 def _extract_edges(ce):
@@ -387,6 +414,14 @@ def generate_d2(defs, group_by_kind=False):
                             f'{indent}  vars: '
                             f'"{_escape_d2(var_list)}"')
 
+                    # Effect rows
+                    for i, effect in enumerate(dsl_def.effects):
+                        summary = _effect_summary(effect)
+                        key = f'eff{i}'
+                        lines.append(
+                            f'{indent}  {key}: '
+                            f'"{_escape_d2(summary)}"')
+
                     lines.append(f'{indent}}}')
 
                     # Docstring note (connected via dotted edge)
@@ -440,6 +475,74 @@ def generate_d2(defs, group_by_kind=False):
                                 )
                             else:
                                 edges.append(f'{src} -> {dst}')
+
+                    # Effect edges (writes)
+                    for effect in dsl_def.effects:
+                        src = d2_path[dsl_def.name]
+                        if isinstance(effect, AssertEffect):
+                            dst = d2_path.get(effect.template_name)
+                            if dst is not None:
+                                slot_names = [s.name for s in effect.slots]
+                                label = ', '.join(slot_names) \
+                                    if slot_names else ''
+                                style = (
+                                    'style.stroke: "#e74c3c"; '
+                                    'style.stroke-width: 2'
+                                )
+                                if label:
+                                    edges.append(
+                                        f'{src} -> {dst}: '
+                                        f'"assert: {_escape_d2(label)}" '
+                                        f'{{{style}}}'
+                                    )
+                                else:
+                                    edges.append(
+                                        f'{src} -> {dst}: '
+                                        f'"assert" '
+                                        f'{{{style}}}'
+                                    )
+                        elif isinstance(effect, RetractEffect):
+                            tpl_name = _resolve_pattern_var_template(
+                                dsl_def, effect.var_name)
+                            if tpl_name:
+                                dst = d2_path.get(tpl_name)
+                                if dst is not None:
+                                    style = (
+                                        'style.stroke: "#e74c3c"; '
+                                        'style.stroke-dash: 3'
+                                    )
+                                    edges.append(
+                                        f'{src} -> {dst}: '
+                                        f'"retract" '
+                                        f'{{{style}}}'
+                                    )
+                        elif isinstance(effect, ModifyEffect):
+                            tpl_name = _resolve_pattern_var_template(
+                                dsl_def, effect.var_name)
+                            if tpl_name:
+                                dst = d2_path.get(tpl_name)
+                                if dst is not None:
+                                    slot_names = [s.name
+                                                  for s in effect.slots]
+                                    label = ', '.join(slot_names) \
+                                        if slot_names else ''
+                                    style = (
+                                        'style.stroke: "#f39c12"; '
+                                        'style.stroke-width: 2'
+                                    )
+                                    if label:
+                                        edges.append(
+                                            f'{src} -> {dst}: '
+                                            f'"modify: '
+                                            f'{_escape_d2(label)}" '
+                                            f'{{{style}}}'
+                                        )
+                                    else:
+                                        edges.append(
+                                            f'{src} -> {dst}: '
+                                            f'"modify" '
+                                            f'{{{style}}}'
+                                        )
 
                 lines.append('')
 

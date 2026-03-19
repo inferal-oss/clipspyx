@@ -10,6 +10,7 @@ from clipspyx.dsl.ir import (
     NotCE, OrCE, ExistsCE, ForallCE, LogicalCE, GoalCE, ExplicitCE,
     SlotConstraint, Var, Wildcard, Literal,
     NotConstraint, OrConstraint, PredicateConstraint,
+    SlotValue, AssertEffect, RetractEffect, ModifyEffect,
 )
 from clipspyx.dsl.codegen import generate_deftemplate, generate_defrule, generate_typecheck_rule
 
@@ -33,6 +34,14 @@ class Animal(Template):
 class Department(Template):
     name: str
     head: Person  # fact-address slot typed to Person
+
+
+class Counter(Template):
+    value: int
+
+
+class Result(Template):
+    msg: str
 
 
 # =============================================================================
@@ -446,6 +455,123 @@ class TestRuleParsing(unittest.TestCase):
 
 
 # =============================================================================
+# Effect parsing tests
+# =============================================================================
+
+class TestEffectParsing(unittest.TestCase):
+    def test_assert_effect_parsed(self):
+        class R(Rule):
+            asserts(Result(msg="hello"))
+
+        rd = R.__clipspyx_dsl__
+        self.assertEqual(len(rd.effects), 1)
+        eff = rd.effects[0]
+        self.assertIsInstance(eff, AssertEffect)
+        self.assertEqual(eff.template_name, Result.__clipspyx_dsl__.name)
+        self.assertEqual(len(eff.slots), 1)
+        self.assertEqual(eff.slots[0].name, 'msg')
+
+    def test_retract_effect_parsed(self):
+        class R(Rule):
+            p = Person(name=name)
+            retracts(p)
+
+        rd = R.__clipspyx_dsl__
+        self.assertEqual(len(rd.effects), 1)
+        eff = rd.effects[0]
+        self.assertIsInstance(eff, RetractEffect)
+        self.assertEqual(eff.var_name, 'p')
+
+    def test_modify_effect_parsed(self):
+        class R(Rule):
+            p = Counter(value=v)
+            modifies(p, value=99)
+
+        rd = R.__clipspyx_dsl__
+        self.assertEqual(len(rd.effects), 1)
+        eff = rd.effects[0]
+        self.assertIsInstance(eff, ModifyEffect)
+        self.assertEqual(eff.var_name, 'p')
+        self.assertEqual(len(eff.slots), 1)
+        self.assertEqual(eff.slots[0].name, 'value')
+
+    def test_action_func_name_none_with_effects(self):
+        class R(Rule):
+            asserts(Result(msg="x"))
+
+        rd = R.__clipspyx_dsl__
+        self.assertIsNone(rd.action_func_name)
+
+    def test_action_func_name_set_without_effects(self):
+        class R(Rule):
+            Person(name=name)
+            def __action__(self):
+                pass
+
+        rd = R.__clipspyx_dsl__
+        self.assertIsNotNone(rd.action_func_name)
+
+    def test_effects_and_action_mutual_exclusivity(self):
+        with self.assertRaises(TypeError):
+            class R(Rule):
+                Person(name=name)
+                asserts(Result(msg="x"))
+                def __action__(self):
+                    pass
+
+    def test_multiple_effects_parsed(self):
+        class R(Rule):
+            p = Person(name=name)
+            retracts(p)
+            asserts(Result(msg=name))
+
+        rd = R.__clipspyx_dsl__
+        self.assertEqual(len(rd.effects), 2)
+        self.assertIsInstance(rd.effects[0], RetractEffect)
+        self.assertIsInstance(rd.effects[1], AssertEffect)
+
+    def test_assert_effect_with_arithmetic(self):
+        class R(Rule):
+            Counter(value=v)
+            asserts(Counter(value=v + 1))
+
+        rd = R.__clipspyx_dsl__
+        self.assertEqual(len(rd.effects), 1)
+        eff = rd.effects[0]
+        self.assertIsInstance(eff, AssertEffect)
+        self.assertIn('+', eff.slots[0].clips_expr)
+
+    def test_assert_effect_with_bound_var(self):
+        class R(Rule):
+            Person(name=name)
+            asserts(Result(msg=name))
+
+        rd = R.__clipspyx_dsl__
+        eff = rd.effects[0]
+        self.assertEqual(eff.slots[0].clips_expr, '?name')
+
+    def test_assert_effect_no_slots(self):
+        class R(Rule):
+            asserts(Person())
+
+        rd = R.__clipspyx_dsl__
+        eff = rd.effects[0]
+        self.assertIsInstance(eff, AssertEffect)
+        self.assertEqual(eff.slots, [])
+
+    def test_conditions_still_parsed_with_effects(self):
+        """CEs before effects are still parsed as conditions."""
+        class R(Rule):
+            p = Person(name=name)
+            retracts(p)
+
+        rd = R.__clipspyx_dsl__
+        self.assertEqual(len(rd.conditions), 1)
+        self.assertIsInstance(rd.conditions[0], AssignedPatternCE)
+        self.assertEqual(len(rd.effects), 1)
+
+
+# =============================================================================
 # Codegen tests
 # =============================================================================
 
@@ -705,6 +831,99 @@ class TestCodegen(unittest.TestCase):
         self.assertIn(f'({dname} (head ?ref))', result)
         self.assertIn(f'(test (neq (fact-slot-value ?ref __py_type__) {pname}))', result)
         self.assertIn('__py_typecheck_error', result)
+
+
+# =============================================================================
+# Effect codegen tests
+# =============================================================================
+
+class TestEffectCodegen(unittest.TestCase):
+    def test_defrule_assert_effect(self):
+        class R(Rule):
+            asserts(Result(msg="hello"))
+
+        result = generate_defrule(R.__clipspyx_dsl__)
+        rname = Result.__clipspyx_dsl__.name
+        self.assertIn(f'(assert ({rname} (msg "hello")))', result)
+        self.assertIn('=>', result)
+
+    def test_defrule_retract_effect(self):
+        class R(Rule):
+            p = Person(name=name)
+            retracts(p)
+
+        result = generate_defrule(R.__clipspyx_dsl__)
+        self.assertIn('(retract ?p)', result)
+
+    def test_defrule_modify_effect(self):
+        class R(Rule):
+            p = Counter(value=v)
+            modifies(p, value=99)
+
+        result = generate_defrule(R.__clipspyx_dsl__)
+        self.assertIn('(modify ?p (value 99))', result)
+
+    def test_defrule_no_bridge_with_effects(self):
+        class R(Rule):
+            asserts(Result(msg="test"))
+
+        result = generate_defrule(R.__clipspyx_dsl__)
+        self.assertNotIn('__dsl_', result)
+
+    def test_defrule_bridge_without_effects(self):
+        class R(Rule):
+            Person(name=name)
+            def __action__(self):
+                pass
+
+        result = generate_defrule(R.__clipspyx_dsl__)
+        self.assertIn('__dsl_', result)
+
+    def test_defrule_arithmetic_in_assert(self):
+        class R(Rule):
+            Counter(value=v)
+            asserts(Counter(value=v + 1))
+
+        cname = Counter.__clipspyx_dsl__.name
+        result = generate_defrule(R.__clipspyx_dsl__)
+        self.assertIn(f'(assert ({cname} (value (+ ?v 1))))', result)
+
+    def test_defrule_multiple_effects(self):
+        class R(Rule):
+            p = Person(name=name)
+            retracts(p)
+            asserts(Result(msg=name))
+
+        result = generate_defrule(R.__clipspyx_dsl__)
+        self.assertIn('(retract ?p)', result)
+        rname = Result.__clipspyx_dsl__.name
+        self.assertIn(f'(assert ({rname} (msg ?name)))', result)
+
+    def test_defrule_assert_no_slots(self):
+        class R(Rule):
+            asserts(Person())
+
+        pname = Person.__clipspyx_dsl__.name
+        result = generate_defrule(R.__clipspyx_dsl__)
+        self.assertIn(f'(assert ({pname}))', result)
+
+    def test_defrule_modify_multiple_slots(self):
+        class R(Rule):
+            p = Person(name=name, age=age)
+            modifies(p, name="updated", age=99)
+
+        result = generate_defrule(R.__clipspyx_dsl__)
+        self.assertIn('(modify ?p', result)
+        self.assertIn('(name "updated")', result)
+        self.assertIn('(age 99)', result)
+
+    def test_defrule_string_literal_in_assert(self):
+        class R(Rule):
+            asserts(Person(name="Alice", age=30))
+
+        pname = Person.__clipspyx_dsl__.name
+        result = generate_defrule(R.__clipspyx_dsl__)
+        self.assertIn(f'(assert ({pname} (name "Alice") (age 30)))', result)
 
 
 # =============================================================================
@@ -1520,6 +1739,180 @@ class TestNegative(unittest.TestCase):
         env.run()
 
         self.assertEqual(results, [])
+
+
+# =============================================================================
+# Effect end-to-end tests
+# =============================================================================
+
+class TestEffectEndToEnd(unittest.TestCase):
+    def test_assert_effect_creates_fact(self):
+        """Assert effect fires and creates a new fact."""
+        class Trigger(Template):
+            go: int
+
+        class MakeResult(Rule):
+            Trigger(go=1)
+            asserts(Result(msg="done"))
+
+        env = Environment()
+        TriggerAssert = env.define(Trigger)
+        env.define(Result)
+        env.define(MakeResult)
+        env.reset()
+
+        TriggerAssert(go=1)
+        env.run()
+
+        tpl = env.find_template(Result.__clipspyx_dsl__.name)
+        facts = list(tpl.facts())
+        self.assertGreaterEqual(len(facts), 1)
+        self.assertEqual(facts[0]['msg'], 'done')
+
+    def test_retract_effect_removes_fact(self):
+        """Retract effect fires and removes the matched fact."""
+        class RemovePerson(Rule):
+            p = Person(name=name)
+            retracts(p)
+
+        env = Environment()
+        PersonAssert = env.define(Person)
+        env.define(RemovePerson)
+        env.reset()
+
+        PersonAssert(name='temp')
+        tpl = env.find_template(Person.__clipspyx_dsl__.name)
+        self.assertGreaterEqual(len(list(tpl.facts())), 1)
+
+        env.run()
+        self.assertEqual(len(list(tpl.facts())), 0)
+
+    def test_modify_effect_changes_slot(self):
+        """Modify effect fires and changes a slot value."""
+        class SetCounter(Rule):
+            p = Counter(value=v)
+            modifies(p, value=99)
+
+        env = Environment()
+        CounterAssert = env.define(Counter)
+        env.define(SetCounter)
+        env.reset()
+
+        CounterAssert(value=0)
+        env.run()
+
+        tpl = env.find_template(Counter.__clipspyx_dsl__.name)
+        facts = list(tpl.facts())
+        self.assertEqual(len(facts), 1)
+        self.assertEqual(facts[0]['value'], 99)
+
+    def test_bound_vars_in_assert_effect(self):
+        """Variables bound on LHS are used in assert effect slot values."""
+        class Input(Template):
+            x: int
+            y: int
+
+        class Total(Template):
+            sum: int
+
+        class ComputeTotal(Rule):
+            Input(x=x, y=y)
+            asserts(Total(sum=x + y))
+
+        env = Environment()
+        InputAssert = env.define(Input)
+        env.define(Total)
+        env.define(ComputeTotal)
+        env.reset()
+
+        InputAssert(x=3, y=7)
+        env.run()
+
+        tpl = env.find_template(Total.__clipspyx_dsl__.name)
+        facts = list(tpl.facts())
+        self.assertGreaterEqual(len(facts), 1)
+        self.assertEqual(facts[0]['sum'], 10)
+
+    def test_multiple_effects_retract_and_assert(self):
+        """Rule with retract + assert: removes source, creates result."""
+        class ProcessPerson(Rule):
+            p = Person(name=name)
+            retracts(p)
+            asserts(Result(msg=name))
+
+        env = Environment()
+        PersonAssert = env.define(Person)
+        env.define(Result)
+        env.define(ProcessPerson)
+        env.reset()
+
+        PersonAssert(name='Alice')
+        env.run()
+
+        ptpl = env.find_template(Person.__clipspyx_dsl__.name)
+        self.assertEqual(len(list(ptpl.facts())), 0)
+
+        rtpl = env.find_template(Result.__clipspyx_dsl__.name)
+        facts = list(rtpl.facts())
+        self.assertGreaterEqual(len(facts), 1)
+        self.assertEqual(facts[0]['msg'], 'Alice')
+
+    def test_retracts_non_pattern_var_raises(self):
+        """retracts() with a non-pattern variable raises TypeError at define time."""
+        class BadRetract(Rule):
+            Person(name=name)
+            retracts(name)
+
+        env = Environment()
+        env.define(Person)
+        with self.assertRaises(TypeError):
+            env.define(BadRetract)
+
+    def test_modifies_non_pattern_var_raises(self):
+        """modifies() with a non-pattern variable raises TypeError at define time."""
+        class BadModify(Rule):
+            Counter(value=v)
+            modifies(v, value=1)
+
+        env = Environment()
+        env.define(Counter)
+        with self.assertRaises(TypeError):
+            env.define(BadModify)
+
+    def test_effects_only_rule_no_action(self):
+        """Effects-only rule works without __action__."""
+        class NoAction(Rule):
+            Person(name=name)
+            asserts(Result(msg=name))
+
+        env = Environment()
+        PersonAssert = env.define(Person)
+        env.define(Result)
+        env.define(NoAction)
+        env.reset()
+
+        PersonAssert(name='test')
+        env.run()
+
+        tpl = env.find_template(Result.__clipspyx_dsl__.name)
+        facts = list(tpl.facts())
+        self.assertGreaterEqual(len(facts), 1)
+
+    def test_assert_effect_with_string_literal(self):
+        """Assert effect with string literal creates correct fact."""
+        class MakeGreeting(Rule):
+            asserts(Result(msg="hello world"))
+
+        env = Environment()
+        env.define(Result)
+        env.define(MakeGreeting)
+        env.reset()
+        env.run()
+
+        tpl = env.find_template(Result.__clipspyx_dsl__.name)
+        facts = list(tpl.facts())
+        self.assertGreaterEqual(len(facts), 1)
+        self.assertEqual(facts[0]['msg'], 'hello world')
 
 
 if __name__ == '__main__':

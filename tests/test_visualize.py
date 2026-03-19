@@ -559,6 +559,131 @@ class TestGenerateD2CELabels(unittest.TestCase):
 
 
 # =============================================================================
+# Effect visualization
+# =============================================================================
+
+class VizCounter(Template):
+    value: int
+
+
+class VizResult(Template):
+    msg: str
+
+
+class TestGenerateD2Effects(unittest.TestCase):
+    """Effect rows and edges in D2 output."""
+
+    def test_assert_effect_row_in_table(self):
+        class VizAssertRule(Rule):
+            VizPerson(name=name)
+            asserts(VizResult(msg=name))
+
+        d2 = generate_d2([VizPerson, VizResult, VizAssertRule])
+        self.assertIn('assert', d2.lower())
+        self.assertIn('VizResult', d2)
+
+    def test_retract_effect_row_in_table(self):
+        class VizRetractRule(Rule):
+            p = VizPerson(name=name)
+            retracts(p)
+
+        d2 = generate_d2([VizPerson, VizRetractRule])
+        self.assertIn('retract p', d2)
+
+    def test_modify_effect_row_in_table(self):
+        class VizModifyRule(Rule):
+            p = VizCounter(value=v)
+            modifies(p, value=99)
+
+        d2 = generate_d2([VizCounter, VizModifyRule])
+        self.assertIn('modify p(value)', d2)
+
+    def test_assert_edge_red_solid(self):
+        class VizAssertEdge(Rule):
+            VizPerson(name=name)
+            asserts(VizResult(msg=name))
+
+        d2 = generate_d2([VizPerson, VizResult, VizAssertEdge])
+        self.assertIn('#e74c3c', d2)
+        self.assertIn('stroke-width: 2', d2)
+        # Assert edge should NOT be dashed
+        rule_path = _d2_path(VizAssertEdge)
+        result_path = _d2_path(VizResult)
+        # Find the assert edge line
+        for line in d2.splitlines():
+            if 'assert' in line and result_path in line:
+                self.assertNotIn('stroke-dash', line)
+                break
+
+    def test_retract_edge_red_dashed(self):
+        class VizRetractEdge(Rule):
+            p = VizPerson(name=name)
+            retracts(p)
+
+        d2 = generate_d2([VizPerson, VizRetractEdge])
+        self.assertIn('#e74c3c', d2)
+        self.assertIn('stroke-dash', d2)
+
+    def test_modify_edge_orange(self):
+        class VizModifyEdge(Rule):
+            p = VizCounter(value=v)
+            modifies(p, value=99)
+
+        d2 = generate_d2([VizCounter, VizModifyEdge])
+        self.assertIn('#f39c12', d2)
+
+    def test_assert_edge_direction(self):
+        class VizAssertDir(Rule):
+            VizPerson(name=name)
+            asserts(VizResult(msg=name))
+
+        d2 = generate_d2([VizPerson, VizResult, VizAssertDir])
+        rule_path = _d2_path(VizAssertDir)
+        result_path = _d2_path(VizResult)
+        self.assertIn(f'{rule_path} -> {result_path}', d2)
+
+    def test_retract_edge_direction(self):
+        class VizRetractDir(Rule):
+            p = VizPerson(name=name)
+            retracts(p)
+
+        d2 = generate_d2([VizPerson, VizRetractDir])
+        rule_path = _d2_path(VizRetractDir)
+        person_path = _d2_path(VizPerson)
+        self.assertIn(f'{rule_path} -> {person_path}', d2)
+
+    def test_multiple_effect_edges(self):
+        class VizMultiEffect(Rule):
+            p = VizPerson(name=name)
+            retracts(p)
+            asserts(VizResult(msg=name))
+
+        d2 = generate_d2([VizPerson, VizResult, VizMultiEffect])
+        rule_path = _d2_path(VizMultiEffect)
+        person_path = _d2_path(VizPerson)
+        result_path = _d2_path(VizResult)
+        # Both edges present
+        retract_found = False
+        assert_found = False
+        for line in d2.splitlines():
+            if 'retract' in line and person_path in line:
+                retract_found = True
+            if 'assert' in line and result_path in line:
+                assert_found = True
+        self.assertTrue(retract_found, "Retract edge not found")
+        self.assertTrue(assert_found, "Assert edge not found")
+
+    def test_effects_with_no_action_still_render(self):
+        """Effects-only rule (no __action__) renders correctly."""
+        class VizEffectsOnly(Rule):
+            asserts(VizResult(msg="hello"))
+
+        d2 = generate_d2([VizResult, VizEffectsOnly])
+        self.assertIn('VizEffectsOnly', d2)
+        self.assertIn('shape: sql_table', d2)
+
+
+# =============================================================================
 # group_by_kind
 # =============================================================================
 

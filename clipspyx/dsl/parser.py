@@ -9,9 +9,12 @@ from clipspyx.dsl.ir import (
     ExistsCE, ForallCE, LogicalCE, GoalCE, ExplicitCE,
     SlotConstraint, Var, Wildcard, Literal,
     NotConstraint, OrConstraint, AndConstraint, PredicateConstraint,
+    SlotValue, AssertEffect, RetractEffect, ModifyEffect,
 )
 
 _CE_WRAPPERS = {'exists', 'forall', 'logical', 'goal', 'explicit'}
+
+_EFFECT_NAMES = {'asserts', 'retracts', 'modifies'}
 
 _NIL_NAMES = frozenset({'None', 'NIL'})
 
@@ -44,6 +47,7 @@ def parse_rule(cls) -> RuleDef:
         raise ValueError(f"Could not find class {cls.__name__} in source")
 
     conditions = []
+    effects = []
     # all_vars: every variable seen (for CLIPS syntax generation)
     # rhs_vars: variables visible on the RHS (excludes forall/exists/not scoped vars)
     all_vars = set()
@@ -87,6 +91,13 @@ def parse_rule(cls) -> RuleDef:
                         last_ce.description = _extract_string(item.value)
                         continue
 
+                    # Effect calls: asserts(...), retracts(...), modifies(...)
+                    if _is_effect_call(item.value):
+                        effect = _parse_effect(item.value, all_vars)
+                        if effect is not None:
+                            effects.append(effect)
+                        continue
+
                     ce_vars = set()
                     result = _process_expr(item.value, ce_vars)
                     if result is not None:
@@ -99,7 +110,11 @@ def parse_rule(cls) -> RuleDef:
                             rhs_vars.update(ce_vars)
 
     qualified = f"{cls.__module__}.{cls.__name__}"
-    action_func_name = f'__dsl_{qualified}'
+
+    if effects:
+        action_func_name = None
+    else:
+        action_func_name = f'__dsl_{qualified}'
 
     return RuleDef(
         name=qualified,
@@ -108,6 +123,7 @@ def parse_rule(cls) -> RuleDef:
         bound_vars=sorted(rhs_vars),
         pattern_vars=pattern_vars,
         salience=salience,
+        effects=effects,
     )
 
 
@@ -534,3 +550,79 @@ def _parse_ce_wrapper(call_node, bound_vars):
         raise ValueError("explicit requires a template pattern argument")
 
     return None
+
+
+def _is_effect_call(node) -> bool:
+    """Check if a CST node is an effect call (asserts/retracts/modifies)."""
+    if isinstance(node, cst.Call) and isinstance(node.func, cst.Name):
+        return node.func.value in _EFFECT_NAMES
+    return False
+
+
+def _parse_effect(node, bound_vars):
+    """Parse an effect call and return the appropriate IR node."""
+    func_name = node.func.value
+
+    if func_name == 'asserts':
+        return _parse_assert_effect(node, bound_vars)
+    elif func_name == 'retracts':
+        return _parse_retract_effect(node)
+    elif func_name == 'modifies':
+        return _parse_modify_effect(node, bound_vars)
+    return None
+
+
+def _parse_assert_effect(node, bound_vars):
+    """Parse asserts(Template(slot=val, ...)) into an AssertEffect."""
+    if not node.args:
+        return None
+    arg_val = node.args[0].value
+    if not (isinstance(arg_val, cst.Call) and _is_template_call(arg_val)):
+        return None
+
+    source_name = arg_val.func.value
+    template_cls = _template_registry[source_name]
+    template_name = template_cls.__clipspyx_dsl__.name
+    slots = []
+
+    for arg in arg_val.args:
+        if arg.keyword is None:
+            continue
+        slot_name = arg.keyword.value
+        clips_expr = _atom_to_clips(arg.value, bound_vars)
+        slots.append(SlotValue(name=slot_name, clips_expr=clips_expr))
+
+    return AssertEffect(template_name=template_name, slots=slots)
+
+
+def _parse_retract_effect(node):
+    """Parse retracts(var) into a RetractEffect."""
+    if not node.args:
+        return None
+    arg_val = node.args[0].value
+    if isinstance(arg_val, cst.Name):
+        return RetractEffect(var_name=arg_val.value)
+    return None
+
+
+def _parse_modify_effect(node, bound_vars):
+    """Parse modifies(var, slot=val, ...) into a ModifyEffect."""
+    if not node.args:
+        return None
+
+    # First arg is the variable name (positional)
+    first_arg = node.args[0].value
+    if not isinstance(first_arg, cst.Name):
+        return None
+    var_name = first_arg.value
+
+    # Remaining keyword args are slot modifications
+    slots = []
+    for arg in node.args[1:]:
+        if arg.keyword is None:
+            continue
+        slot_name = arg.keyword.value
+        clips_expr = _atom_to_clips(arg.value, bound_vars)
+        slots.append(SlotValue(name=slot_name, clips_expr=clips_expr))
+
+    return ModifyEffect(var_name=var_name, slots=slots)

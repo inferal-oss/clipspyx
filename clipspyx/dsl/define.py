@@ -1,5 +1,8 @@
 from clipspyx.common import CLIPS_MAJOR
-from clipspyx.dsl.ir import TemplateDef, RuleDef, GoalCE, ExplicitCE
+from clipspyx.dsl.ir import (
+    TemplateDef, RuleDef, GoalCE, ExplicitCE,
+    RetractEffect, ModifyEffect,
+)
 from clipspyx.dsl.codegen import generate_deftemplate, generate_defrule, generate_typecheck_rule
 
 
@@ -103,22 +106,32 @@ def _define_rule(env, cls, rdef: RuleDef):
             if isinstance(ce, ExplicitCE):
                 raise TypeError("explicit() requires CLIPS 7.0 or later")
 
-    action_method = cls.__clipspyx_action__
-    arg_names = _build_arg_list(rdef)
-
-    if action_method is not None:
-        def action_bridge(*args):
-            ns = _ActionNamespace()
-            ns.__env__ = env
-            for name, val in zip(arg_names, args):
-                setattr(ns, name, val)
-            action_method(ns)
-
-        env.define_function(action_bridge, name=rdef.action_func_name)
+    if rdef.effects:
+        # Validate that retracts/modifies reference pattern variables
+        pattern_set = set(rdef.pattern_vars)
+        for effect in rdef.effects:
+            if isinstance(effect, (RetractEffect, ModifyEffect)):
+                if effect.var_name not in pattern_set:
+                    raise TypeError(
+                        f"{effect.__class__.__name__}: '{effect.var_name}' "
+                        f"is not a pattern variable (bound via assignment)")
     else:
-        def noop_bridge(*args):
-            pass
-        env.define_function(noop_bridge, name=rdef.action_func_name)
+        action_method = cls.__clipspyx_action__
+        arg_names = _build_arg_list(rdef)
+
+        if action_method is not None:
+            def action_bridge(*args):
+                ns = _ActionNamespace()
+                ns.__env__ = env
+                for name, val in zip(arg_names, args):
+                    setattr(ns, name, val)
+                action_method(ns)
+
+            env.define_function(action_bridge, name=rdef.action_func_name)
+        else:
+            def noop_bridge(*args):
+                pass
+            env.define_function(noop_bridge, name=rdef.action_func_name)
 
     clips_str = generate_defrule(rdef)
     env.build(clips_str)

@@ -208,13 +208,52 @@ class ExplicitCE:
         return f'(explicit {self.pattern.to_clips()})'
 
 
+# --- Rule IR: Effects (RHS declarations) ---
+
+@dataclass
+class SlotValue:
+    name: str
+    clips_expr: str
+
+
+@dataclass
+class AssertEffect:
+    template_name: str
+    slots: list[SlotValue] = field(default_factory=list)
+
+    def to_clips(self) -> str:
+        if self.slots:
+            slots_str = ' '.join(f'({s.name} {s.clips_expr})' for s in self.slots)
+            return f'(assert ({self.template_name} {slots_str}))'
+        return f'(assert ({self.template_name}))'
+
+
+@dataclass
+class RetractEffect:
+    var_name: str
+
+    def to_clips(self) -> str:
+        return f'(retract ?{self.var_name})'
+
+
+@dataclass
+class ModifyEffect:
+    var_name: str
+    slots: list[SlotValue] = field(default_factory=list)
+
+    def to_clips(self) -> str:
+        slots_str = ' '.join(f'({s.name} {s.clips_expr})' for s in self.slots)
+        return f'(modify ?{self.var_name} {slots_str})'
+
+
 # --- Rule IR: Top level ---
 
 @dataclass
 class RuleDef:
     name: str
     conditions: list
-    action_func_name: str
+    action_func_name: str | None
     bound_vars: list[str] = field(default_factory=list)
     pattern_vars: list[str] = field(default_factory=list)
     salience: int | None = None
+    effects: list = field(default_factory=list)
