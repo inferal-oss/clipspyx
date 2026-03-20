@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- DSL documentation now covers declarative effect declarations (`asserts()`,
+  `retracts()`, `modifies()`), `__clips_name__` for custom CLIPS names, and
+  updated RHS overview
+
 ## [0.2.0] - 2026-03-20
 
 ### Added

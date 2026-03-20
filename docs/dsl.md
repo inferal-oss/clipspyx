@@ -4,19 +4,23 @@ A Python-native DSL for defining CLIPS templates and rules. Instead of writing
 raw CLIPS syntax strings, you write annotated Python classes that compile to
 CLIPS constructs at define-time.
 
-## Why no CLIPS language on the RHS?
+## RHS: effects vs. Python actions
 
-CLIPS has its own programming language for rule actions: variable binding,
-loops, string manipulation, I/O, and so on. The DSL does not replicate any of
-this. Rule actions are plain Python methods (`__action__`), and the DSL bridges
-them back into CLIPS through a generated deffunction. When a rule fires, CLIPS
-calls the bridge function, which passes the bound variables into your Python
-method.
+Rules can express their right-hand side in two ways:
 
-This means you get Python's full language for actions (string formatting,
-library calls, data structures, exception handling) without learning a second
-language. The CLIPS engine handles pattern matching and truth maintenance; Python
-handles everything else.
+- **Declarative effects** (`asserts`, `retracts`, `modifies`) generate native
+  CLIPS RHS code. No Python bridge is involved: the CLIPS engine executes the
+  assert/retract/modify directly. This is faster and makes side effects visible
+  to static analysis and visualization.
+
+- **Python actions** (`__action__` method) run arbitrary Python code when the
+  rule fires. The DSL bridges them into CLIPS through a generated deffunction.
+  When a rule fires, CLIPS calls the bridge function, which passes bound
+  variables into your Python method.
+
+Use effects when the rule only needs to assert, retract, or modify facts. Use
+`__action__` when you need Python's full language (string formatting, library
+calls, I/O, exception handling). The two cannot be combined in a single rule.
 
 ## Installation
 
@@ -80,6 +84,22 @@ This generates (assuming the code lives in a module called `myapp`):
 Template and rule names in CLIPS are qualified with the Python module name
 (`module.ClassName`) to prevent cross-module name clashes. See
 [Module-qualified names](#module-qualified-names) for details.
+
+### Custom CLIPS names
+
+By default, a template's CLIPS name is `module.ClassName` (see
+[Module-qualified names](#module-qualified-names)). Set `__clips_name__` to
+override it:
+
+```python
+class Person(Template):
+    __clips_name__ = "person"
+    name: str
+    age: int = 0
+```
+
+This generates `(deftemplate person ...)` instead of `(deftemplate myapp.Person ...)`.
+Useful when integrating with existing CLIPS code that expects specific names.
 
 ### Supported types
 
@@ -414,6 +434,104 @@ Person(name=name and name != "Admin")
 # (name ?name&:(neq ?name "Admin"))
 ```
 
+## Declarative effects
+
+Instead of writing an `__action__` method, a rule can declare its RHS effects
+directly in the class body using `asserts()`, `retracts()`, and `modifies()`.
+These generate native CLIPS RHS code with no Python bridge function, which is
+faster and makes the rule's side effects visible to static analysis and
+visualization.
+
+**Effects and `__action__` are mutually exclusive.** A rule can use one or the
+other, not both. Combining them raises `TypeError` at class creation time.
+
+### asserts()
+
+Assert a new fact when the rule fires:
+
+```python
+class DeriveGreeting(Rule):
+    Person(name=name)
+    asserts(Greeting(msg=name))
+```
+
+```clips
+(defrule myapp.DeriveGreeting
+  (myapp.Person (name ?name))
+  =>
+  (assert (myapp.Greeting (msg ?name))))
+```
+
+Slot values support literals, bound variables, and arithmetic expressions:
+
+```python
+class IncrementCounter(Rule):
+    c = Counter(value=v)
+    retracts(c)
+    asserts(Counter(value=v + 1))
+```
+
+### retracts()
+
+Retract a matched fact. The argument must be a pattern variable (from an
+assigned pattern):
+
+```python
+class RemovePerson(Rule):
+    p = Person(name="Bob")
+    retracts(p)
+```
+
+```clips
+(defrule myapp.RemovePerson
+  ?p <- (myapp.Person (name "Bob"))
+  =>
+  (retract ?p))
+```
+
+### modifies()
+
+Modify slots on a matched fact. The first argument is a pattern variable;
+keyword arguments specify the new slot values:
+
+```python
+class Promote(Rule):
+    e = Employee(name=name, level=level)
+    level >= 5
+    modifies(e, title="Senior")
+```
+
+```clips
+(defrule myapp.Promote
+  ?e <- (myapp.Employee (name ?name) (level ?level))
+  (test (>= ?level 5))
+  =>
+  (modify ?e (title "Senior")))
+```
+
+### Multiple effects
+
+A rule can declare multiple effects:
+
+```python
+class TransferDepartment(Rule):
+    e = Employee(name=name)
+    old = Assignment(employee=name, dept="Sales")
+    retracts(old)
+    asserts(Assignment(employee=name, dept="Engineering"))
+    modifies(e, title="Transferred")
+```
+
+### Visualization
+
+Effects appear in diagrams as distinct edge types:
+
+| Effect | Edge style | Color |
+|--------|-----------|-------|
+| `asserts` | Solid, width 2 | Red |
+| `retracts` | Dashed, width 1 | Red |
+| `modifies` | Solid, width 2 | Orange |
+
 ## Salience
 
 Set rule priority with `__salience__`:
@@ -460,6 +578,10 @@ Higher salience fires first.
 | `x and x > 5` | `?x&:(> ?x 5)` | Field: bind + predicate |
 | `_` | `?` | Field: anonymous wildcard |
 | `__salience__ = 10` | `(declare (salience 10))` | Rule priority |
+| `asserts(T(slot=val))` | `(assert (mod.T (slot val)))` | Effect: assert fact |
+| `retracts(p)` | `(retract ?p)` | Effect: retract matched fact |
+| `modifies(p, slot=val)` | `(modify ?p (slot val))` | Effect: modify matched fact |
+| `__clips_name__ = "x"` | `(deftemplate x ...)` | Override CLIPS name |
 | `P = env.define(Person)` | — | Bound asserter (primary) |
 | `Person(__env__=env, ...)` | — | Direct assertion (fallback) |
 
@@ -677,9 +799,10 @@ See `examples/hr_system.py` for a complete example.
   defined in the REPL or via `python -c` will fail. Rules must live in `.py`
   files.
 
-- **No CLIPS language on the RHS.** Rule actions are Python methods, not CLIPS
-  code. If you need to assert or retract facts from an action, use the clipspyx
-  Python API (e.g., `env.assert_string(...)`) rather than CLIPS syntax.
+- **Effects and `__action__` are mutually exclusive.** A rule can use declarative
+  effects (`asserts`, `retracts`, `modifies`) or a Python `__action__` method,
+  but not both. For complex actions that combine fact manipulation with arbitrary
+  Python logic, use `__action__` with the clipspyx Python API.
 
 - **libcst is required.** The `dsl` extra must be installed. Without it,
   importing `clipspyx.dsl` will raise an `ImportError`.
