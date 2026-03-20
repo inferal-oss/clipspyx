@@ -1,6 +1,6 @@
 [project]
 name = "clipspyx-ffi"
-version = "0.1.0"
+version = "0.2.0"
 description = "Shared CFFI build infrastructure for clipspyx"
 license = "BSD-3-Clause"
 requires-python = ">=3.10"
