@@ -511,7 +511,8 @@ class Promote(Rule):
 
 ### Multiple effects
 
-A rule can declare multiple effects:
+A rule can declare any number of effects, including multiple effects of the
+same kind:
 
 ```python
 class TransferDepartment(Rule):
@@ -519,6 +520,7 @@ class TransferDepartment(Rule):
     old = Assignment(employee=name, dept="Sales")
     retracts(old)
     asserts(Assignment(employee=name, dept="Engineering"))
+    asserts(AuditLog(action="transfer", employee=name))
     modifies(e, title="Transferred")
 ```
 

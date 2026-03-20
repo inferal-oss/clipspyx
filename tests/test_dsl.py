@@ -530,6 +530,17 @@ class TestEffectParsing(unittest.TestCase):
         self.assertIsInstance(rd.effects[0], RetractEffect)
         self.assertIsInstance(rd.effects[1], AssertEffect)
 
+    def test_multiple_same_kind_effects_parsed(self):
+        class R(Rule):
+            Person(name=name)
+            asserts(Result(msg=name))
+            asserts(Result(msg="copy"))
+
+        rd = R.__clipspyx_dsl__
+        self.assertEqual(len(rd.effects), 2)
+        self.assertIsInstance(rd.effects[0], AssertEffect)
+        self.assertIsInstance(rd.effects[1], AssertEffect)
+
     def test_assert_effect_with_arithmetic(self):
         class R(Rule):
             Counter(value=v)
@@ -898,6 +909,17 @@ class TestEffectCodegen(unittest.TestCase):
         self.assertIn('(retract ?p)', result)
         rname = Result.__clipspyx_dsl__.name
         self.assertIn(f'(assert ({rname} (msg ?name)))', result)
+
+    def test_defrule_multiple_same_kind_effects(self):
+        class R(Rule):
+            Person(name=name)
+            asserts(Result(msg=name))
+            asserts(Result(msg="copy"))
+
+        result = generate_defrule(R.__clipspyx_dsl__)
+        rname = Result.__clipspyx_dsl__.name
+        self.assertIn(f'(assert ({rname} (msg ?name)))', result)
+        self.assertIn(f'(assert ({rname} (msg "copy")))', result)
 
     def test_defrule_assert_no_slots(self):
         class R(Rule):
@@ -1897,6 +1919,27 @@ class TestEffectEndToEnd(unittest.TestCase):
         tpl = env.find_template(Result.__clipspyx_dsl__.name)
         facts = list(tpl.facts())
         self.assertGreaterEqual(len(facts), 1)
+
+    def test_multiple_same_kind_effects(self):
+        """Two asserts() in the same rule both create facts."""
+        class DuplicateResult(Rule):
+            Person(name=name)
+            asserts(Result(msg=name))
+            asserts(Result(msg="copy"))
+
+        env = Environment()
+        PersonAssert = env.define(Person)
+        env.define(Result)
+        env.define(DuplicateResult)
+        env.reset()
+
+        PersonAssert(name='Alice')
+        env.run()
+
+        tpl = env.find_template(Result.__clipspyx_dsl__.name)
+        facts = list(tpl.facts())
+        msgs = sorted(f['msg'] for f in facts)
+        self.assertEqual(msgs, ['Alice', 'copy'])
 
     def test_assert_effect_with_string_literal(self):
         """Assert effect with string literal creates correct fact."""
