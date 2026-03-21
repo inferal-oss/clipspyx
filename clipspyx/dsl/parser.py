@@ -10,11 +10,14 @@ from clipspyx.dsl.ir import (
     SlotConstraint, Var, Wildcard, Literal,
     NotConstraint, OrConstraint, AndConstraint, PredicateConstraint,
     SlotValue, AssertEffect, RetractEffect, ModifyEffect,
+    OrderingConstraint,
 )
 
 _CE_WRAPPERS = {'exists', 'forall', 'logical', 'goal', 'explicit'}
 
 _EFFECT_NAMES = {'asserts', 'retracts', 'modifies'}
+
+_ORDERING_NAMES = {'before', 'after', 'concurrent'}
 
 _NIL_NAMES = frozenset({'None', 'NIL'})
 
@@ -48,6 +51,7 @@ def parse_rule(cls) -> RuleDef:
 
     conditions = []
     effects = []
+    ordering = []
     # all_vars: every variable seen (for CLIPS syntax generation)
     # rhs_vars: variables visible on the RHS (excludes forall/exists/not scoped vars)
     all_vars = set()
@@ -91,6 +95,13 @@ def parse_rule(cls) -> RuleDef:
                         last_ce.description = _extract_string(item.value)
                         continue
 
+                    # Ordering calls: before(...), after(...), concurrent(...)
+                    if _is_ordering_call(item.value):
+                        constraint = _parse_ordering_call(item.value)
+                        if constraint is not None:
+                            ordering.append(constraint)
+                        continue
+
                     # Effect calls: asserts(...), retracts(...), modifies(...)
                     if _is_effect_call(item.value):
                         effect = _parse_effect(item.value, all_vars)
@@ -124,6 +135,7 @@ def parse_rule(cls) -> RuleDef:
         pattern_vars=pattern_vars,
         salience=salience,
         effects=effects,
+        ordering=ordering,
     )
 
 
@@ -549,6 +561,24 @@ def _parse_ce_wrapper(call_node, bound_vars):
                 return ExplicitCE(pattern=_parse_call_to_pattern(val, bound_vars))
         raise ValueError("explicit requires a template pattern argument")
 
+    return None
+
+
+def _is_ordering_call(node) -> bool:
+    """Check if a CST node is an ordering call (before/after/concurrent)."""
+    if isinstance(node, cst.Call) and isinstance(node.func, cst.Name):
+        return node.func.value in _ORDERING_NAMES
+    return False
+
+
+def _parse_ordering_call(node):
+    """Parse an ordering call and return an OrderingConstraint IR node."""
+    func_name = node.func.value
+    if not node.args:
+        return None
+    arg_val = node.args[0].value
+    if isinstance(arg_val, cst.Name):
+        return OrderingConstraint(kind=func_name, target=arg_val.value)
     return None
 
 

@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Declarative ordering constraints for DSL rules: `before()`, `after()`,
+  `concurrent()` compute CLIPS salience automatically from a topological sort
+  of the ordering graph; supports transitive ordering, transitive concurrent
+  groups, cycle detection, and auto-finalization on `define()`
+
 ### Changed
 
 - DSL documentation now covers declarative effect declarations (`asserts()`,

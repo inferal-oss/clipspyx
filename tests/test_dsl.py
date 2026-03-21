@@ -1958,5 +1958,350 @@ class TestEffectEndToEnd(unittest.TestCase):
         self.assertEqual(facts[0]['msg'], 'hello world')
 
 
+# =============================================================================
+# Ordering declaration tests
+# =============================================================================
+
+class TestOrderingIR(unittest.TestCase):
+    """Tests for ordering constraint parsing and IR."""
+
+    def test_ordering_constraint_parsed(self):
+        """before()/after()/concurrent() produce OrderingConstraint IR nodes."""
+        from clipspyx.dsl.ir import OrderingConstraint
+
+        class First(Rule):
+            Person(name=name)
+
+            def __action__(self):
+                pass
+
+        class Second(Rule):
+            after(First)
+            Person(name=name)
+
+            def __action__(self):
+                pass
+
+        rdef = Second.__clipspyx_dsl__
+        self.assertEqual(len(rdef.ordering), 1)
+        self.assertIsInstance(rdef.ordering[0], OrderingConstraint)
+        self.assertEqual(rdef.ordering[0].kind, 'after')
+        # Target is a string when defined in local scope (resolved at define time)
+        self.assertEqual(rdef.ordering[0].target, 'First')
+
+    def test_before_constraint_parsed(self):
+        """before() produces correct OrderingConstraint."""
+        from clipspyx.dsl.ir import OrderingConstraint
+
+        class TargetRule(Rule):
+            Person(name=name)
+
+            def __action__(self):
+                pass
+
+        class BeforeRule(Rule):
+            before(TargetRule)
+            Person(name=name)
+
+            def __action__(self):
+                pass
+
+        rdef = BeforeRule.__clipspyx_dsl__
+        self.assertEqual(len(rdef.ordering), 1)
+        self.assertEqual(rdef.ordering[0].kind, 'before')
+
+    def test_concurrent_constraint_parsed(self):
+        """concurrent() produces correct OrderingConstraint."""
+        from clipspyx.dsl.ir import OrderingConstraint
+
+        class PeerA(Rule):
+            Person(name=name)
+
+            def __action__(self):
+                pass
+
+        class PeerB(Rule):
+            concurrent(PeerA)
+            Person(name=name)
+
+            def __action__(self):
+                pass
+
+        rdef = PeerB.__clipspyx_dsl__
+        self.assertEqual(len(rdef.ordering), 1)
+        self.assertEqual(rdef.ordering[0].kind, 'concurrent')
+
+    def test_multiple_ordering_constraints(self):
+        """Multiple ordering declarations in one rule."""
+        class Alpha(Rule):
+            Person(name=name)
+
+            def __action__(self):
+                pass
+
+        class Gamma(Rule):
+            Person(name=name)
+
+            def __action__(self):
+                pass
+
+        class Beta(Rule):
+            after(Alpha)
+            before(Gamma)
+            Person(name=name)
+
+            def __action__(self):
+                pass
+
+        rdef = Beta.__clipspyx_dsl__
+        self.assertEqual(len(rdef.ordering), 2)
+        kinds = {oc.kind for oc in rdef.ordering}
+        self.assertEqual(kinds, {'after', 'before'})
+
+    def test_ordering_and_salience_mutually_exclusive(self):
+        """__salience__ and ordering declarations raise TypeError."""
+        with self.assertRaises(TypeError) as ctx:
+            class Bad(Rule):
+                __salience__ = 5
+                after(Person)  # Person is a Template, but error is about mutual exclusivity
+                Person(name=name)
+
+                def __action__(self):
+                    pass
+
+        self.assertIn('ordering', str(ctx.exception).lower())
+
+
+class TestOrderingEndToEnd(unittest.TestCase):
+    """End-to-end tests for auto-salience from ordering declarations."""
+
+    def test_before_after_ordering(self):
+        """Rules with before/after fire in declared order."""
+        results = []
+
+        class StepA(Rule):
+            Person(name=name)
+
+            def __action__(self):
+                results.append('A')
+
+        class StepC(Rule):
+            after(StepA)
+            Person(name=name)
+
+            def __action__(self):
+                results.append('C')
+
+        class StepB(Rule):
+            after(StepA)
+            before(StepC)
+            Person(name=name)
+
+            def __action__(self):
+                results.append('B')
+
+        env = Environment()
+        PersonAssert = env.define(Person)
+        env.define(StepA)
+        env.define(StepB)
+        env.define(StepC)
+        env.reset()
+
+        PersonAssert(name='test')
+        env.run()
+
+        self.assertEqual(results, ['A', 'B', 'C'])
+
+    def test_concurrent_same_salience(self):
+        """Concurrent rules get the same salience value."""
+        class ConA(Rule):
+            Person(name=name)
+
+            def __action__(self):
+                pass
+
+        class ConB(Rule):
+            concurrent(ConA)
+            Person(name=name)
+
+            def __action__(self):
+                pass
+
+        env = Environment()
+        env.define(Person)
+        env.define(ConA)
+        env.define(ConB)
+
+        # Both should have the same salience
+        self.assertEqual(
+            ConA.__clipspyx_dsl__.salience,
+            ConB.__clipspyx_dsl__.salience)
+
+    def test_concurrent_transitive(self):
+        """Concurrent groups are transitive: A concurrent B, B concurrent C."""
+        class TrA(Rule):
+            Person(name=name)
+
+            def __action__(self):
+                pass
+
+        class TrB(Rule):
+            concurrent(TrA)
+            Person(name=name)
+
+            def __action__(self):
+                pass
+
+        class TrC(Rule):
+            concurrent(TrB)
+            Person(name=name)
+
+            def __action__(self):
+                pass
+
+        env = Environment()
+        env.define(Person)
+        env.define(TrA)
+        env.define(TrB)
+        env.define(TrC)
+
+        # All three should have the same salience
+        self.assertEqual(TrA.__clipspyx_dsl__.salience,
+                         TrB.__clipspyx_dsl__.salience)
+        self.assertEqual(TrB.__clipspyx_dsl__.salience,
+                         TrC.__clipspyx_dsl__.salience)
+
+    def test_ordering_cycle_detected(self):
+        """Cycle in ordering graph raises OrderingCycleError."""
+        from clipspyx.dsl.ordering import OrderingCycleError
+
+        # All rules have ordering, so they all go to pending together
+        # and form a real cycle: A -> B -> C -> A
+        class CycA(Rule):
+            Person(name=name)
+
+            def __action__(self):
+                pass
+
+        class CycB(Rule):
+            after(CycA)
+            Person(name=name)
+
+            def __action__(self):
+                pass
+
+        class CycC(Rule):
+            after(CycB)
+            before(CycA)
+            Person(name=name)
+
+            def __action__(self):
+                pass
+
+        env = Environment()
+        env.define(Person)
+        # All three have ordering, so all go to pending
+        env.define(CycB)
+        env.define(CycC)
+        with self.assertRaises(OrderingCycleError):
+            env.define(CycA)
+
+    def test_ordering_with_effects(self):
+        """Ordering works with effect-based rules."""
+        class EffFirst(Rule):
+            Person(name=name)
+            asserts(Result(msg=name))
+
+        class EffSecond(Rule):
+            after(EffFirst)
+            Result(msg=msg)
+            asserts(Badge(owner=msg, level=1))
+
+        env = Environment()
+        PersonAssert = env.define(Person)
+        env.define(Result)
+        env.define(Badge)
+        env.define(EffFirst)
+        env.define(EffSecond)
+        env.reset()
+
+        PersonAssert(name='Alice')
+        env.run()
+
+        tpl = env.find_template(Badge.__clipspyx_dsl__.name)
+        facts = list(tpl.facts())
+        self.assertGreaterEqual(len(facts), 1)
+        self.assertEqual(facts[0]['owner'], 'Alice')
+
+    def test_ordering_define_order_independent(self):
+        """Rules can be defined in any order; auto-finalization handles it."""
+        results = []
+
+        class Late(Rule):
+            Person(name=name)
+
+            def __action__(self):
+                results.append('late')
+
+        class Early(Rule):
+            before(Late)
+            Person(name=name)
+
+            def __action__(self):
+                results.append('early')
+
+        env = Environment()
+        PersonAssert = env.define(Person)
+        # Define Late first, then Early - should still work
+        env.define(Late)
+        env.define(Early)
+        env.reset()
+
+        PersonAssert(name='test')
+        env.run()
+
+        self.assertEqual(results, ['early', 'late'])
+
+    def test_concurrent_with_before_after(self):
+        """Concurrent group with before/after between groups."""
+        results = []
+
+        class GroupAFirst(Rule):
+            Person(name=name)
+
+            def __action__(self):
+                results.append('A1')
+
+        class GroupASecond(Rule):
+            concurrent(GroupAFirst)
+            Person(name=name)
+
+            def __action__(self):
+                results.append('A2')
+
+        class GroupB(Rule):
+            after(GroupAFirst)
+            Person(name=name)
+
+            def __action__(self):
+                results.append('B')
+
+        env = Environment()
+        PersonAssert = env.define(Person)
+        env.define(GroupAFirst)
+        env.define(GroupASecond)
+        env.define(GroupB)
+        env.reset()
+
+        PersonAssert(name='test')
+        env.run()
+
+        # GroupB should fire after both A rules
+        self.assertEqual(results[-1], 'B')
+        # A1 and A2 should both fire before B
+        self.assertIn('A1', results[:2])
+        self.assertIn('A2', results[:2])
+
+
 if __name__ == '__main__':
     unittest.main()

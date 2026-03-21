@@ -246,6 +246,14 @@ class ModifyEffect:
         return f'(modify ?{self.var_name} {slots_str})'
 
 
+# --- Rule IR: Ordering declarations ---
+
+@dataclass
+class OrderingConstraint:
+    kind: str  # 'before' | 'after' | 'concurrent'
+    target: object  # Rule class reference or string (resolved lazily)
+
+
 # --- Rule IR: Top level ---
 
 @dataclass
@@ -257,3 +265,4 @@ class RuleDef:
     pattern_vars: list[str] = field(default_factory=list)
     salience: int | None = None
     effects: list = field(default_factory=list)
+    ordering: list[OrderingConstraint] = field(default_factory=list)

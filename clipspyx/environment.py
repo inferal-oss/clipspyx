@@ -52,7 +52,7 @@ class Environment:
 
     __slots__ = ('_env', '_facts', '_agenda', '_classes',
                  '_modules', '_functions', '_routers', '_tables',
-                 '_namespaces', '_dsl_defs')
+                 '_namespaces', '_dsl_defs', '_ordering_pending')
 
     def __init__(self):
         self._env = lib.CreateEnvironment()
@@ -60,6 +60,7 @@ class Environment:
         initialize_environment_data(self._env)
 
         self._dsl_defs = []
+        self._ordering_pending = {}
 
         self._facts = Facts(self._env)
         self._agenda = Agenda(self._env)
@@ -229,3 +230,4 @@ class Environment:
         if not lib.Clear(self._env):
             raise CLIPSError(self._env)
         self._dsl_defs = []
+        self._ordering_pending = {}

@@ -24,10 +24,18 @@ def _ensure_typecheck_bridge(env):
         env.define_function(typecheck_error, name='__py_typecheck_error')
 
         # Wrap Agenda.run to re-raise stored type-check errors
+        # and check for unresolved ordering constraints
         agenda = env._agenda
         original_run = agenda.run
 
         def checked_run(limit=None):
+            # Safety net: fail if ordering rules were never finalized
+            if env._ordering_pending:
+                from clipspyx.dsl.ordering import OrderingError
+                names = ', '.join(sorted(env._ordering_pending.keys()))
+                raise OrderingError(
+                    f"Unresolved ordering constraints for rules: {names}")
+
             _typecheck_errors[env_id] = None
             result = original_run(limit)
             pending = _typecheck_errors[env_id]
@@ -62,6 +70,7 @@ def define(env, cls):
 
     For templates: builds the deftemplate construct.
     For rules: registers the bridge function and builds the defrule construct.
+    Rules with ordering constraints are deferred until all targets are available.
     """
     dsl_def = getattr(cls, '__clipspyx_dsl__', None)
     if dsl_def is None:
@@ -72,10 +81,83 @@ def define(env, cls):
         env._dsl_defs.append(cls)
         return result
     elif isinstance(dsl_def, RuleDef):
-        _define_rule(env, cls, dsl_def)
-        env._dsl_defs.append(cls)
+        if dsl_def.ordering:
+            # Defer: accumulate for auto-finalization
+            env._ordering_pending[dsl_def.name] = (cls, dsl_def)
+            env._dsl_defs.append(cls)
+            _try_finalize_ordering(env)
+        else:
+            _define_rule(env, cls, dsl_def)
+            env._dsl_defs.append(cls)
+            # A non-ordering rule might complete a pending group
+            if env._ordering_pending:
+                _try_finalize_ordering(env)
     else:
         raise TypeError(f"Unknown DSL definition type: {type(dsl_def).__name__}")
+
+
+def _try_finalize_ordering(env):
+    """Attempt to resolve all pending ordering constraints and build rules.
+
+    Called after each define(). If all targets are resolvable, computes
+    salience and builds all pending ordered rules. Otherwise, does nothing
+    and waits for more define() calls.
+
+    Non-ordering rules referenced as targets are included as leaf nodes
+    in the ordering graph so their salience is computed relative to the group.
+    """
+    pending = env._ordering_pending
+    if not pending:
+        return
+
+    from clipspyx.dsl.ordering import compute_ordering_salience
+
+    # Build lookup of already-defined rules (not in pending)
+    defined_rules = {}  # short_name -> (cls, rdef)
+    for cls_obj in env._dsl_defs:
+        dsl_def = getattr(cls_obj, '__clipspyx_dsl__', None)
+        if dsl_def is not None and isinstance(dsl_def, RuleDef):
+            if dsl_def.name not in pending:
+                defined_rules[cls_obj.__name__] = (cls_obj, dsl_def)
+
+    # Collect referenced leaf nodes; return early if any target is missing
+    leaf_nodes = {}  # qname -> (cls, rdef)
+    for qname, (cls, rdef) in pending.items():
+        for oc in rdef.ordering:
+            target_name = (oc.target if isinstance(oc.target, str)
+                           else oc.target.__name__)
+            # Skip if target is among pending rules
+            found_in_pending = any(
+                c.__name__ == target_name for c, _ in pending.values()
+            )
+            if found_in_pending:
+                continue
+            # Check if target is an already-defined rule
+            if target_name in defined_rules:
+                leaf_cls, leaf_rdef = defined_rules[target_name]
+                leaf_nodes[leaf_rdef.name] = (leaf_cls, leaf_rdef)
+            else:
+                # Target not yet available, wait for more define() calls
+                return
+
+    # All targets resolvable -- compute salience including leaf nodes
+    full_pending = dict(pending)
+    full_pending.update(leaf_nodes)
+    salience_map = compute_ordering_salience(
+        full_pending, leaf_names=set(leaf_nodes.keys()))
+
+    # Update leaf node rdefs with computed salience for consistency
+    for qname, (cls, rdef) in leaf_nodes.items():
+        rdef.salience = salience_map[qname]
+
+    # Build all pending rules with computed salience
+    for qname in list(pending.keys()):
+        cls, rdef = pending[qname]
+        rdef.salience = salience_map[qname]
+        rdef.ordering = []  # clear so re-inclusion as leaf won't re-resolve
+        _define_rule(env, cls, rdef)
+
+    pending.clear()
 
 
 def _define_template(env, cls, tdef: TemplateDef):

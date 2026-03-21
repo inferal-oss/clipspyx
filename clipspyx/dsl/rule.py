@@ -77,6 +77,9 @@ class _RuleNamespace(dict):
         # Seed effect functions
         for eff_name in ('asserts', 'retracts', 'modifies'):
             self[eff_name] = _make_ce_func()
+        # Seed ordering functions
+        for ord_name in ('before', 'after', 'concurrent'):
+            self[ord_name] = _make_ce_func()
         # Seed Symbol as a callable returning _Placeholder
         self['Symbol'] = _make_ce_func()
 
@@ -131,6 +134,26 @@ class _RuleMeta(type):
                 raise TypeError(
                     f"Rule {name} cannot define both effects "
                     f"(asserts/retracts/modifies) and __action__")
+
+            # Mutual exclusivity: ordering and __salience__ cannot coexist
+            if (cls.__clipspyx_dsl__.ordering
+                    and cls.__clipspyx_dsl__.salience is not None):
+                raise TypeError(
+                    f"Rule {name} cannot define both ordering "
+                    f"(before/after/concurrent) and __salience__")
+
+            # Resolve ordering target strings to class references
+            if cls.__clipspyx_dsl__.ordering:
+                import sys
+                module_ns = sys.modules.get(cls.__module__)
+                if module_ns is not None:
+                    module_dict = vars(module_ns)
+                    for oc in cls.__clipspyx_dsl__.ordering:
+                        if isinstance(oc.target, str) and oc.target in module_dict:
+                            target_cls = module_dict[oc.target]
+                            if (isinstance(target_cls, type)
+                                    and issubclass(target_cls, Rule)):
+                                oc.target = target_cls
 
         return cls
 
