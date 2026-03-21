@@ -18,6 +18,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - DSL documentation now covers declarative effect declarations (`asserts()`,
   `retracts()`, `modifies()`), `__clips_name__` for custom CLIPS names, and
   updated RHS overview
+- CLIPS 7.0x source updated to SVN r970; build-time `modulbin.c` patch removed
+  (fix now included upstream)
 
 ## [0.2.0] - 2026-03-20
 
