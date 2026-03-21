@@ -1,7 +1,7 @@
    /*******************************************************/
    /*      "C" Language Integrated Production System      */
    /*                                                     */
-   /*            CLIPS Version 7.00  01/23/24             */
+   /*            CLIPS Version 7.00  03/18/26             */
    /*                                                     */
    /*             DEFMODULE BSAVE/BLOAD MODULE            */
    /*******************************************************/
@@ -131,6 +131,9 @@ void UpdateDefmoduleItemHeaderHM(
    size_t firstOffset, lastOffset;
 
    theHeader->theModule = ModulePointer(theBsaveHeader->theModule);
+   theHeader->itemCount = 0;
+   theHeader->hashTableSize = 0;
+   theHeader->hashTable = NULL;
    if (theBsaveHeader->firstItem == ULONG_MAX)
      {
       theHeader->firstItem = NULL;
