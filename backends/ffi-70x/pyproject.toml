@@ -1,17 +1,17 @@
 [project]
 name = "clipspyx-ffi-70x"
-version = "0.2.0"
+version = "0.3.0"
 description = "CLIPS 7.0x CFFI extension for clipspyx"
 license = "BSD-3-Clause"
 requires-python = ">=3.10"
-dependencies = ["cffi>=1.0.0", "clipspyx-ffi==0.2.0"]
+dependencies = ["cffi>=1.0.0", "clipspyx-ffi==0.3.0"]
 
 [project.urls]
 Homepage = "https://github.com/inferal-oss/clipspyx"
 Repository = "https://github.com/inferal-oss/clipspyx"
 
 [build-system]
-requires = ["setuptools>=42", "cffi>=1.0.0", "clipspyx-ffi==0.2.0"]
+requires = ["setuptools>=42", "cffi>=1.0.0", "clipspyx-ffi==0.3.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]

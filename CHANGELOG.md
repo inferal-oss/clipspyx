@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-03-21
+
 ### Added
 
 - Declarative ordering constraints for DSL rules: `before()`, `after()`,
@@ -57,6 +59,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `git apply` patch failure on Windows due to CRLF corruption ([989e154](https://github.com/inferal-oss/clipspyx/commit/989e154), [f95829d](https://github.com/inferal-oss/clipspyx/commit/f95829d))
 - Linux wheels rejected by PyPI due to `linux_x86_64` platform tag ([233faa3](https://github.com/inferal-oss/clipspyx/commit/233faa3))
 
-[Unreleased]: https://github.com/inferal-oss/clipspyx/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/inferal-oss/clipspyx/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/inferal-oss/clipspyx/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/inferal-oss/clipspyx/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/inferal-oss/clipspyx/commits/v0.1.0

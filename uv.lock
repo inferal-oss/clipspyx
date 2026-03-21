@@ -103,7 +103,7 @@ wheels = [
 
 [[package]]
 name = "clipspyx"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "." }
 
 [package.optional-dependencies]
@@ -135,7 +135,7 @@ dev = [{ name = "pytest", specifier = ">=8.0.0" }]
 
 [[package]]
 name = "clipspyx-ffi"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "backends/ffi" }
 dependencies = [
     { name = "cffi" },
@@ -146,7 +146,7 @@ requires-dist = [{ name = "cffi", specifier = ">=1.0.0" }]
 
 [[package]]
 name = "clipspyx-ffi-64x"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "backends/ffi-64x" }
 dependencies = [
     { name = "cffi" },
@@ -161,7 +161,7 @@ requires-dist = [
 
 [[package]]
 name = "clipspyx-ffi-70x"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "backends/ffi-70x" }
 dependencies = [
     { name = "cffi" },

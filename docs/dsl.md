@@ -557,6 +557,149 @@ class HighPriority(Rule):
 
 Higher salience fires first.
 
+## Ordering constraints
+
+Instead of assigning numeric salience values manually, you can declare
+relative ordering between rules using `before()`, `after()`, and
+`concurrent()`. The DSL computes salience values automatically from a
+topological sort of the ordering graph.
+
+**Ordering and `__salience__` are mutually exclusive.** A rule can use one or
+the other, not both. Combining them raises `TypeError` at class creation time.
+
+### before() and after()
+
+Declare that a rule should fire before or after another rule:
+
+```python
+from clipspyx.dsl import Rule, before, after
+
+class ValidateInput(Rule):
+    before(ProcessInput)
+    Input(data=data)
+
+    def __action__(self):
+        print(f"Validating: {self.data}")
+
+class ProcessInput(Rule):
+    Input(data=data)
+
+    def __action__(self):
+        print(f"Processing: {self.data}")
+
+class LogResult(Rule):
+    after(ProcessInput)
+    Input(data=data)
+
+    def __action__(self):
+        print(f"Logged: {self.data}")
+```
+
+`ValidateInput` fires before `ProcessInput`, and `LogResult` fires after it.
+The DSL assigns salience values (e.g. 2, 1, 0) to enforce this order.
+
+Ordering is transitive: if A is before B and B is before C, then A fires
+before C. You do not need to declare every pair explicitly.
+
+### concurrent()
+
+Declare that two rules should have the same salience (fire in arbitrary order
+relative to each other):
+
+```python
+from clipspyx.dsl import Rule, after, concurrent
+
+class NotifyEmail(Rule):
+    after(ProcessInput)
+    concurrent(NotifySlack)
+    Input(data=data)
+
+    def __action__(self):
+        print(f"Email: {self.data}")
+
+class NotifySlack(Rule):
+    after(ProcessInput)
+    Input(data=data)
+
+    def __action__(self):
+        print(f"Slack: {self.data}")
+```
+
+Both notification rules fire after `ProcessInput` but in either order relative
+to each other.
+
+Concurrent groups are transitive: if A is concurrent with B and B is concurrent
+with C, all three share the same salience.
+
+### Forward references
+
+Ordering targets can reference rules that have not been defined yet. The DSL
+defers rule building until all targets are resolvable:
+
+```python
+class B(Rule):
+    after(A)
+    Person(name=name)
+
+    def __action__(self):
+        print("B")
+
+class A(Rule):
+    Person(name=name)
+
+    def __action__(self):
+        print("A")
+
+env = Environment()
+env.define(B)  # deferred: A not yet defined
+env.define(A)  # triggers finalization: both rules built with correct salience
+```
+
+If `env.run()` is called while ordering rules are still unresolved, it raises
+`OrderingError` listing the pending rules.
+
+### Cycle detection
+
+Circular ordering dependencies are detected and reported:
+
+```python
+class X(Rule):
+    before(Y)
+    Person(name=name)
+
+class Y(Rule):
+    before(X)  # cycle: X -> Y -> X
+    Person(name=name)
+```
+
+This raises `OrderingCycleError` with the cycle path when finalization runs.
+
+### Cross-module ordering
+
+Rules can reference rules from other modules. Import the target rule class and
+use it directly:
+
+```python
+# module_a.py
+class Validate(Rule):
+    Input(data=data)
+    def __action__(self):
+        ...
+
+# module_b.py
+from module_a import Validate
+from clipspyx.dsl import Rule, after
+
+class Process(Rule):
+    after(Validate)
+    Input(data=data)
+    def __action__(self):
+        ...
+```
+
+For rules in the same module, you can reference them by class name even before
+they are defined (forward references are resolved at `define()` time).
+
 ## Syntax reference
 
 | Python | CLIPS | Scope |
@@ -579,7 +722,10 @@ Higher salience fires first.
 | `25 or 30 or 35` | `25\|30\|35` | Field: one of these values |
 | `x and x > 5` | `?x&:(> ?x 5)` | Field: bind + predicate |
 | `_` | `?` | Field: anonymous wildcard |
-| `__salience__ = 10` | `(declare (salience 10))` | Rule priority |
+| `__salience__ = 10` | `(declare (salience 10))` | Rule priority (manual) |
+| `before(OtherRule)` | `(declare (salience N))` | Ordering: fire before target |
+| `after(OtherRule)` | `(declare (salience N))` | Ordering: fire after target |
+| `concurrent(OtherRule)` | `(declare (salience N))` | Ordering: same salience as target |
 | `asserts(T(slot=val))` | `(assert (mod.T (slot val)))` | Effect: assert fact |
 | `retracts(p)` | `(retract ?p)` | Effect: retract matched fact |
 | `modifies(p, slot=val)` | `(modify ?p (slot val))` | Effect: modify matched fact |
@@ -812,3 +958,10 @@ See `examples/hr_system.py` for a complete example.
 - **Variables inside scoped CEs are not accessible.** Variables bound inside
   `forall`, `exists`, or `not` CEs cannot be used in `__action__` because CLIPS
   scopes them to the CE.
+
+- **Ordering and `__salience__` are mutually exclusive.** A rule using
+  `before()`, `after()`, or `concurrent()` cannot also set `__salience__`.
+
+- **All ordering targets must be defined before `env.run()`.** If any ordering
+  rule references a target that was never `define()`d, `env.run()` raises
+  `OrderingError`.
