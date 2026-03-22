@@ -39,6 +39,21 @@ class Wildcard:
 
 
 @dataclass
+class MultifieldWildcard:
+    """$? -- matches zero or more fields."""
+    def to_clips(self) -> str:
+        return '$?'
+
+
+@dataclass
+class MultifieldVar:
+    """$?name -- binds zero or more fields to a variable."""
+    name: str
+    def to_clips(self) -> str:
+        return f'$?{self.name}'
+
+
+@dataclass
 class Literal:
     value: object
 
@@ -93,6 +108,9 @@ class SlotConstraint:
     constraint: object
 
     def to_clips(self) -> str:
+        if isinstance(self.constraint, list):
+            fields = ' '.join(c.to_clips() for c in self.constraint)
+            return f'({self.name} {fields})'
         return f'({self.name} {self.constraint.to_clips()})'
 
 
@@ -266,3 +284,4 @@ class RuleDef:
     salience: int | None = None
     effects: list = field(default_factory=list)
     ordering: list[OrderingConstraint] = field(default_factory=list)
+    multifield_vars: list[str] = field(default_factory=list)

@@ -8,6 +8,7 @@ from clipspyx.dsl.ir import (
     RuleDef, PatternCE, AssignedPatternCE, TestCE, NotCE, OrCE,
     ExistsCE, ForallCE, LogicalCE, GoalCE, ExplicitCE,
     SlotConstraint, Var, Wildcard, Literal,
+    MultifieldWildcard, MultifieldVar,
     NotConstraint, OrConstraint, AndConstraint, PredicateConstraint,
     SlotValue, AssertEffect, RetractEffect, ModifyEffect,
     OrderingConstraint,
@@ -56,6 +57,7 @@ def parse_rule(cls) -> RuleDef:
     # rhs_vars: variables visible on the RHS (excludes forall/exists/not scoped vars)
     all_vars = set()
     rhs_vars = set()
+    multifield_vars = set()
     pattern_vars = []
     salience = None
 
@@ -77,7 +79,8 @@ def parse_rule(cls) -> RuleDef:
             for item in stmt.body:
                 if isinstance(item, cst.Assign):
                     ce_vars = set()
-                    result = _process_assign(item, ce_vars, pattern_vars)
+                    result = _process_assign(item, ce_vars, pattern_vars,
+                                             multifield_vars)
                     if result == '__salience__':
                         salience = _extract_int(item.value)
                     elif result is not None:
@@ -104,13 +107,15 @@ def parse_rule(cls) -> RuleDef:
 
                     # Effect calls: asserts(...), retracts(...), modifies(...)
                     if _is_effect_call(item.value):
-                        effect = _parse_effect(item.value, all_vars)
+                        effect = _parse_effect(item.value, all_vars,
+                                               multifield_vars)
                         if effect is not None:
                             effects.append(effect)
                         continue
 
                     ce_vars = set()
-                    result = _process_expr(item.value, ce_vars)
+                    result = _process_expr(item.value, ce_vars,
+                                           multifield_vars)
                     if result is not None:
                         if comment_label:
                             result.label = comment_label
@@ -136,10 +141,11 @@ def parse_rule(cls) -> RuleDef:
         salience=salience,
         effects=effects,
         ordering=ordering,
+        multifield_vars=sorted(multifield_vars),
     )
 
 
-def _process_assign(node, bound_vars, pattern_vars):
+def _process_assign(node, bound_vars, pattern_vars, multifield_vars):
     """Process an assignment statement in the rule body."""
     # Check for __salience__
     if (len(node.targets) == 1
@@ -156,7 +162,8 @@ def _process_assign(node, bound_vars, pattern_vars):
         target_name = node.targets[0].target.value
         call = node.value
         if _is_template_call(call):
-            pattern = _parse_call_to_pattern(call, bound_vars)
+            pattern = _parse_call_to_pattern(call, bound_vars,
+                                             multifield_vars)
             pattern_vars.append(target_name)
             return AssignedPatternCE(
                 var_name=target_name, pattern=pattern)
@@ -164,24 +171,28 @@ def _process_assign(node, bound_vars, pattern_vars):
     return None
 
 
-def _process_expr(node, bound_vars):
+def _process_expr(node, bound_vars, multifield_vars=None):
     """Process an expression statement in the rule body."""
+    if multifield_vars is None:
+        multifield_vars = set()
     # Template call: Person(name=name)
     if isinstance(node, cst.Call) and _is_template_call(node):
-        return _parse_call_to_pattern(node, bound_vars)
+        return _parse_call_to_pattern(node, bound_vars, multifield_vars)
 
     # not Person(...) -> NotCE
     if isinstance(node, cst.UnaryOperation) and isinstance(node.operator, cst.Not):
         inner = node.expression
         if isinstance(inner, cst.Call) and _is_template_call(inner):
-            pattern = _parse_call_to_pattern(inner, bound_vars)
+            pattern = _parse_call_to_pattern(inner, bound_vars,
+                                             multifield_vars)
             return NotCE(pattern=pattern)
 
     # Bitwise not ~Person(...) -> NotCE
     if isinstance(node, cst.UnaryOperation) and isinstance(node.operator, cst.BitInvert):
         inner = node.expression
         if isinstance(inner, cst.Call) and _is_template_call(inner):
-            pattern = _parse_call_to_pattern(inner, bound_vars)
+            pattern = _parse_call_to_pattern(inner, bound_vars,
+                                             multifield_vars)
             return NotCE(pattern=pattern)
 
     # Person(...) | Other(...) -> OrCE
@@ -235,8 +246,11 @@ def _is_ce_wrapper(node) -> bool:
     return False
 
 
-def _parse_call_to_pattern(call_node, bound_vars) -> PatternCE:
+def _parse_call_to_pattern(call_node, bound_vars,
+                           multifield_vars=None) -> PatternCE:
     """Parse a template call into a PatternCE."""
+    if multifield_vars is None:
+        multifield_vars = set()
     source_name = call_node.func.value
     template_cls = _template_registry[source_name]
     template_name = template_cls.__clipspyx_dsl__.name
@@ -246,10 +260,53 @@ def _parse_call_to_pattern(call_node, bound_vars) -> PatternCE:
         if arg.keyword is None:
             continue
         slot_name = arg.keyword.value
-        constraint = _parse_constraint(arg.value, bound_vars)
+        constraint = _parse_slot_value(arg.value, bound_vars,
+                                       multifield_vars)
         slots.append(SlotConstraint(name=slot_name, constraint=constraint))
 
     return PatternCE(template_name=template_name, slots=slots)
+
+
+def _parse_slot_value(node, bound_vars, multifield_vars):
+    """Parse a slot constraint value, handling multifield patterns."""
+    # Ellipsis: ... -> $?
+    if isinstance(node, cst.Ellipsis):
+        return MultifieldWildcard()
+
+    # Tuple: sequence pattern with mix of single/multifield
+    if isinstance(node, cst.Tuple):
+        return _parse_multifield_sequence(node, bound_vars, multifield_vars)
+
+    # Otherwise: existing single-field constraint logic
+    return _parse_constraint(node, bound_vars)
+
+
+def _parse_multifield_sequence(tuple_node, bound_vars, multifield_vars):
+    """Parse a tuple as a multifield sequence pattern."""
+    elements = []
+    for el in tuple_node.elements:
+        if isinstance(el, cst.StarredElement):
+            # *name -> $?name
+            if isinstance(el.value, cst.Name):
+                name = el.value.value
+                if name == '_':
+                    elements.append(MultifieldWildcard())
+                else:
+                    bound_vars.add(name)
+                    multifield_vars.add(name)
+                    elements.append(MultifieldVar(name=name))
+            else:
+                raise ValueError(
+                    f"Starred element must be a name, got {type(el.value)}")
+        elif isinstance(el, cst.Element):
+            val = el.value
+            if isinstance(val, cst.Ellipsis):
+                elements.append(MultifieldWildcard())
+            else:
+                elements.append(_parse_constraint(val, bound_vars))
+        else:
+            elements.append(_parse_constraint(el, bound_vars))
+    return elements
 
 
 def _parse_constraint(node, bound_vars):
@@ -589,21 +646,25 @@ def _is_effect_call(node) -> bool:
     return False
 
 
-def _parse_effect(node, bound_vars):
+def _parse_effect(node, bound_vars, multifield_vars=None):
     """Parse an effect call and return the appropriate IR node."""
+    if multifield_vars is None:
+        multifield_vars = set()
     func_name = node.func.value
 
     if func_name == 'asserts':
-        return _parse_assert_effect(node, bound_vars)
+        return _parse_assert_effect(node, bound_vars, multifield_vars)
     elif func_name == 'retracts':
         return _parse_retract_effect(node)
     elif func_name == 'modifies':
-        return _parse_modify_effect(node, bound_vars)
+        return _parse_modify_effect(node, bound_vars, multifield_vars)
     return None
 
 
-def _parse_assert_effect(node, bound_vars):
+def _parse_assert_effect(node, bound_vars, multifield_vars=None):
     """Parse asserts(Template(slot=val, ...)) into an AssertEffect."""
+    if multifield_vars is None:
+        multifield_vars = set()
     if not node.args:
         return None
     arg_val = node.args[0].value
@@ -619,7 +680,8 @@ def _parse_assert_effect(node, bound_vars):
         if arg.keyword is None:
             continue
         slot_name = arg.keyword.value
-        clips_expr = _atom_to_clips(arg.value, bound_vars)
+        clips_expr = _effect_slot_to_clips(arg.value, bound_vars,
+                                            multifield_vars)
         slots.append(SlotValue(name=slot_name, clips_expr=clips_expr))
 
     return AssertEffect(template_name=template_name, slots=slots)
@@ -635,8 +697,10 @@ def _parse_retract_effect(node):
     return None
 
 
-def _parse_modify_effect(node, bound_vars):
+def _parse_modify_effect(node, bound_vars, multifield_vars=None):
     """Parse modifies(var, slot=val, ...) into a ModifyEffect."""
+    if multifield_vars is None:
+        multifield_vars = set()
     if not node.args:
         return None
 
@@ -652,7 +716,45 @@ def _parse_modify_effect(node, bound_vars):
         if arg.keyword is None:
             continue
         slot_name = arg.keyword.value
-        clips_expr = _atom_to_clips(arg.value, bound_vars)
+        clips_expr = _effect_slot_to_clips(arg.value, bound_vars,
+                                            multifield_vars)
         slots.append(SlotValue(name=slot_name, clips_expr=clips_expr))
 
     return ModifyEffect(var_name=var_name, slots=slots)
+
+
+def _effect_slot_to_clips(node, bound_vars, multifield_vars):
+    """Convert an effect slot value to CLIPS expression string.
+
+    Handles multifield patterns: tuples with *name produce $?name,
+    single names in multifield_vars produce $?name.
+    """
+    # Tuple with starred elements -> multifield pattern
+    if isinstance(node, cst.Tuple):
+        parts = []
+        for el in node.elements:
+            if isinstance(el, cst.StarredElement):
+                if isinstance(el.value, cst.Name):
+                    name = el.value.value
+                    if name == '_':
+                        parts.append('$?')
+                    else:
+                        parts.append(f'$?{name}')
+                else:
+                    parts.append('$?')
+            elif isinstance(el, cst.Element):
+                val = el.value
+                if isinstance(val, cst.Name) and val.value in multifield_vars:
+                    parts.append(f'$?{val.value}')
+                else:
+                    parts.append(_atom_to_clips(val, bound_vars))
+            else:
+                parts.append(_atom_to_clips(el, bound_vars))
+        return ' '.join(parts)
+
+    # Single name that is a multifield var
+    if isinstance(node, cst.Name) and node.value in multifield_vars:
+        return f'$?{node.value}'
+
+    # Default: single-field atom
+    return _atom_to_clips(node, bound_vars)

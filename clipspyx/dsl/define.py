@@ -209,11 +209,26 @@ def _define_rule(env, cls, rdef: RuleDef):
                     setattr(ns, name, val)
                 action_method(ns)
 
-            env.define_function(action_bridge, name=rdef.action_func_name)
+            if rdef.multifield_vars:
+                # Store directly without deffunction (preserves multifield
+                # boundaries). The generated CLIPS code uses
+                # (python-function "name" ...) which looks up user_functions.
+                from clipspyx.common import environment_data
+                user_functions = environment_data(env._env, 'user_functions')
+                user_functions.functions[rdef.action_func_name] = action_bridge
+            else:
+                env.define_function(action_bridge,
+                                    name=rdef.action_func_name)
         else:
             def noop_bridge(*args):
                 pass
-            env.define_function(noop_bridge, name=rdef.action_func_name)
+            if rdef.multifield_vars:
+                from clipspyx.common import environment_data
+                user_functions = environment_data(env._env, 'user_functions')
+                user_functions.functions[rdef.action_func_name] = noop_bridge
+            else:
+                env.define_function(noop_bridge,
+                                    name=rdef.action_func_name)
 
     tracing = (getattr(env, '_tracing_state', None) is not None
                and env._tracing_state.enabled)

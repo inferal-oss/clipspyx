@@ -40,6 +40,10 @@ class _Placeholder:
     def __rand__(self, other): return _Placeholder()
     def __invert__(self): return _Placeholder()
 
+    # Iterable (for *name in tuples)
+    def __iter__(self):
+        return iter(())
+
     # Callable (for template calls and CE wrappers)
     def __call__(self, *args, **kwargs): return _Placeholder()
 
@@ -48,10 +52,13 @@ class _Placeholder:
 
 
 def _make_ce_func():
-    """Create a callable that returns _Placeholder for CE wrappers."""
-    def ce_func(*args, **kwargs):
-        return _Placeholder()
-    return ce_func
+    """Create a callable that returns _Placeholder for CE wrappers.
+
+    Returns a _Placeholder instance directly since it is already callable
+    (via __call__) and iterable (via __iter__), which allows it to work
+    in *-unpacking contexts like (*before, "chess", *after).
+    """
+    return _Placeholder()
 
 
 class _RuleNamespace(dict):

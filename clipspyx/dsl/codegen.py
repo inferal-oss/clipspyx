@@ -68,9 +68,21 @@ def generate_defrule(rdef: RuleDef, tracing: bool = False) -> str:
     else:
         # Build RHS: call the bridge deffunction with bound vars
         arg_names = _build_arg_list(rdef)
+        multifield_set = set(rdef.multifield_vars)
         if arg_names:
-            args_str = ' '.join(f'?{n}' for n in arg_names)
-            lines.append(f'  ({rdef.action_func_name} {args_str})')
+            args_parts = []
+            for n in arg_names:
+                if n in multifield_set:
+                    args_parts.append(f'$?{n}')
+                else:
+                    args_parts.append(f'?{n}')
+            args_str = ' '.join(args_parts)
+            if rdef.multifield_vars:
+                lines.append(
+                    f'  (python-function {rdef.action_func_name}'
+                    f' {args_str})')
+            else:
+                lines.append(f'  ({rdef.action_func_name} {args_str})')
         else:
             lines.append(f'  ({rdef.action_func_name})')
 

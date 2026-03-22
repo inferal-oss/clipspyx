@@ -16,6 +16,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`Multi[Fact]`); enables templates that reference facts of any template type
 - C-level fact lifecycle callbacks: `AddAssertFunction`, `AddRetractFunction`,
   `AddModifyFunction` exposed in CFFI bindings (both 6.4x and 7.0x)
+- Multifield pattern matching in DSL rules: `...` for multifield wildcards,
+  `*name` for multifield variables, tuple syntax for sequence patterns
+  (`(*before, "chess", *after)`); works in both LHS patterns and
+  declarative effects
 
 ## [0.3.0] - 2026-03-21
 

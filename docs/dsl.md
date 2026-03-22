@@ -434,6 +434,76 @@ Person(name=name and name != "Admin")
 # (name ?name&:(neq ?name "Admin"))
 ```
 
+## Multifield patterns
+
+For multislot matching, the DSL uses Python's `...` (Ellipsis) for multifield
+wildcards and `*name` (star unpacking) for multifield variables.
+
+### Multifield wildcard
+
+Use `...` to match zero or more fields without binding:
+
+```python
+Person(hobbies=...)         # (hobbies $?)
+```
+
+### Multifield variable
+
+Use `*name` inside a tuple to bind zero or more fields:
+
+```python
+Person(hobbies=(*h,))       # (hobbies $?h) — binds entire multislot
+```
+
+The variable is available in `__action__` as a Python tuple:
+
+```python
+class ListHobbies(Rule):
+    Person(name=name, hobbies=(*h,))
+
+    def __action__(self):
+        for hobby in self.h:  # h is a tuple
+            print(hobby)
+```
+
+### Sequence patterns
+
+Combine multifield variables, single-field variables, literals, and wildcards
+in a tuple to match specific patterns:
+
+```python
+# Match multislot containing "chess" anywhere
+Person(hobbies=(*before, "chess", *after))
+# (hobbies $?before "chess" $?after)
+
+# Match multislot starting with "chess"
+Person(hobbies=("chess", *rest))
+# (hobbies "chess" $?rest)
+
+# Extract a single element with context
+Data(items=(*before, x, *after))
+# (items $?before ?x $?after)
+
+# Mix single-field wildcard, literal, and multifield wildcard
+Data(items=(_, "chess", ...))
+# (items ? "chess" $?)
+```
+
+### Multifield variables in effects
+
+Multifield variables can be used in declarative effects:
+
+```python
+class CopyItems(Rule):
+    d = Data(items=(*h,))
+    asserts(Output(items=(*h,)))
+```
+
+This generates:
+```clips
+(assert (mod.Output (items $?h)))
+```
+
 ## Declarative effects
 
 Instead of writing an `__action__` method, a rule can declare its RHS effects
@@ -722,6 +792,9 @@ they are defined (forward references are resolved at `define()` time).
 | `25 or 30 or 35` | `25\|30\|35` | Field: one of these values |
 | `x and x > 5` | `?x&:(> ?x 5)` | Field: bind + predicate |
 | `_` | `?` | Field: anonymous wildcard |
+| `...` | `$?` | Multifield: zero or more fields |
+| `(*h,)` | `$?h` | Multifield: bind all fields |
+| `(*a, "x", *b)` | `$?a "x" $?b` | Multifield: sequence pattern |
 | `__salience__ = 10` | `(declare (salience 10))` | Rule priority (manual) |
 | `before(OtherRule)` | `(declare (salience N))` | Ordering: fire before target |
 | `after(OtherRule)` | `(declare (salience N))` | Ordering: fire after target |
