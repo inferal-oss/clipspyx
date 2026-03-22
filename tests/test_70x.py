@@ -604,6 +604,73 @@ class TestMultiLevelInheritance(unittest.TestCase):
         self.assertTrue(cat.has_supertemplate(animal))
 
 
+@unittest.skipUnless(CLIPS_70, "CLIPS 7.0+ required")
+class TestUQVHandling(unittest.TestCase):
+    """Test universally quantified value (UQV) handling in goal slots."""
+
+    def setUp(self):
+        self.env = Environment()
+        # Template with two slots; backward chaining constrains only 'name'
+        self.env.build('(deftemplate person (slot name) (slot age))')
+        self.env.build('(deftemplate result (slot found))')
+
+        # Goal CE rule enabling goal generation for person
+        self.env.build(
+            '(defrule goal-person'
+            ' (goal (person (name ?n)))'
+            ' (not (person (name ?n)))'
+            ' =>'
+            ' (printout t ""))')
+
+        # Forward rule: triggers goal for person when result exists
+        # but person doesn't; only 'name' is constrained, 'age' gets UQV
+        self.env.build(
+            '(defrule need-person'
+            ' (result (found yes))'
+            ' (person (name bob))'
+            ' =>'
+            ' (printout t ""))')
+
+        self.env.reset()
+        self.env.assert_string('(result (found yes))')
+
+    def test_uqv_slot_returns_sentinel(self):
+        """Reading an unspecified goal slot returns UniversallyQuantifiedValue."""
+        goals = list(self.env.goals())
+        self.assertGreater(len(goals), 0)
+        goal = goals[0]
+        age_val = goal['age']
+        self.assertIsInstance(age_val, clipspyx.UniversallyQuantifiedValue)
+
+    def test_uqv_singleton(self):
+        """UniversallyQuantifiedValue is a singleton."""
+        from clipspyx import UniversallyQuantifiedValue
+        self.assertIs(UniversallyQuantifiedValue(), UniversallyQuantifiedValue())
+
+    def test_uqv_repr_str(self):
+        """str() and repr() of UQV return '??'."""
+        from clipspyx import UniversallyQuantifiedValue
+        v = UniversallyQuantifiedValue()
+        self.assertEqual(repr(v), '??')
+        self.assertEqual(str(v), '??')
+
+    def test_uqv_bool_false(self):
+        """bool(UniversallyQuantifiedValue()) is False."""
+        from clipspyx import UniversallyQuantifiedValue
+        self.assertFalse(bool(UniversallyQuantifiedValue()))
+
+    def test_goal_slot_iteration_with_uqv(self):
+        """Iterating all goal slots works without error when UQV is present."""
+        goals = list(self.env.goals())
+        self.assertGreater(len(goals), 0)
+        goal = goals[0]
+        # __iter__ yields (slot_name, value) pairs via slot_values()
+        values = dict(goal)
+        self.assertIn(Symbol('name'), values)
+        self.assertIn(Symbol('age'), values)
+        self.assertIsInstance(values[Symbol('age')], clipspyx.UniversallyQuantifiedValue)
+
+
 class TestVersionQuery(unittest.TestCase):
     """These tests run regardless of CLIPS version."""
 

@@ -59,8 +59,7 @@ async def _timer_handler(goal, env):
     state = env._goal_handler_state
 
     # Read only the slots relevant to this kind.
-    # Unspecified goal slots have universally quantified values (type 12)
-    # which cannot be converted to Python values.
+    # Unspecified goal slots return UniversallyQuantifiedValue.
     seconds = 0.0
     target_time = 0.0
 

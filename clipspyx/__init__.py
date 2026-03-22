@@ -51,12 +51,13 @@ __all__ = ('CLIPSError',
            'TemplateSlotDefaultType',
            'Symbol',
            'InstanceName',
+           'UniversallyQuantifiedValue',
            'SaveMode')
 
 
 from clipspyx.environment import Environment
 from clipspyx.classes import Instance, Class
-from clipspyx.values import Symbol, InstanceName
+from clipspyx.values import Symbol, InstanceName, UniversallyQuantifiedValue
 from clipspyx.routers import Router, LoggingRouter
 from clipspyx.facts import ImpliedFact, TemplateFact, Template
 from clipspyx.common import SaveMode, Strategy, SalienceEvaluation, Verbosity

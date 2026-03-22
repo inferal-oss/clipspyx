@@ -46,6 +46,25 @@ class InstanceName(Symbol):
     """Python equivalent of a CLIPS INSTANCE_NAME."""
 
 
+class UniversallyQuantifiedValue:
+    """Python representation of a CLIPS universally quantified value (??)."""
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __repr__(self):
+        return '??'
+
+    def __str__(self):
+        return '??'
+
+    def __bool__(self):
+        return False
+
+
 def python_value(env, value: ffi.CData) -> type:
     """Convert a CLIPSValue or UDFValue into Python."""
     return PYTHON_VALUES[value.header.type](env, value)
@@ -139,7 +158,9 @@ PYTHON_VALUES = {common.CLIPSType.FLOAT:
                  lambda e, v: InstanceName(
                      ffi.string(v.lexemeValue.contents).decode()),
                  common.CLIPSType.EXTERNAL_ADDRESS: python_external_address,
-                 common.CLIPSType.VOID: lambda e, v: None}
+                 common.CLIPSType.VOID: lambda e, v: None,
+                 common.CLIPSType.UQV:
+                 lambda e, v: UniversallyQuantifiedValue()}
 
 
 CLIPS_VALUES = {int: lib.CreateInteger,

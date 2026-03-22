@@ -60,6 +60,7 @@ class CLIPSType(IntEnum):
     INSTANCE_ADDRESS = 7
     INSTANCE_NAME = 8
     VOID = 9
+    UQV = 12
 
 
 class SaveMode(IntEnum):

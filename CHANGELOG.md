@@ -29,6 +29,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   classes or CLIPS name strings; cancellation via controlling fact retraction
 - `Symbol("...")` literals now work in declarative effects (`asserts`,
   `modifies`); previously fell through to wildcard `?` in effect codegen
+- `UniversallyQuantifiedValue` sentinel for CLIPS universally quantified
+  values (type 12, displayed as `??`); reading unspecified goal slots now
+  returns this sentinel instead of crashing with `KeyError`
 
 ## [0.3.0] - 2026-03-21
 
