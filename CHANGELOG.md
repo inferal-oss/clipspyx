@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Fact lifecycle events: `env.enable_fact_events()` generates `FactAsserted`,
+  `FactRetracted`, and `FactModified` meta-facts for every fact base change;
+  retracted facts captured as ppform strings; modify events deferred to next
+  `run()` cycle; coexists with tracing
+
 ## [0.5.0] - 2026-03-22
 
 ### Added

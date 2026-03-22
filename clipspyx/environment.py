@@ -53,7 +53,8 @@ class Environment:
     __slots__ = ('_env', '_facts', '_agenda', '_classes',
                  '_modules', '_functions', '_routers', '_tables',
                  '_namespaces', '_dsl_defs', '_ordering_pending',
-                 '_tracing_state', '_goal_handler_state')
+                 '_tracing_state', '_goal_handler_state',
+                 '_fact_events_state')
 
     def __init__(self):
         self._env = lib.CreateEnvironment()
@@ -64,6 +65,7 @@ class Environment:
         self._ordering_pending = {}
         self._tracing_state = None
         self._goal_handler_state = None
+        self._fact_events_state = None
 
         self._facts = Facts(self._env)
         self._agenda = Agenda(self._env)
@@ -233,6 +235,16 @@ class Environment:
         """Disable fact provenance tracking."""
         from clipspyx.tracing import disable_tracing
         disable_tracing(self)
+
+    def enable_fact_events(self):
+        """Enable fact lifecycle event meta-facts."""
+        from clipspyx.fact_events import enable_fact_events
+        enable_fact_events(self)
+
+    def disable_fact_events(self):
+        """Disable fact lifecycle event meta-facts."""
+        from clipspyx.fact_events import disable_fact_events
+        disable_fact_events(self)
 
     def enable_goal_handlers(self):
         """Enable async goal handler framework (CLIPS 7.0+ only)."""

@@ -621,6 +621,9 @@ extern "Python" void exit_function(Environment *, int, void *);
 extern "Python" void _tracing_on_assert(Environment *, void *, void *);
 extern "Python" void _tracing_on_retract(Environment *, void *, void *);
 extern "Python" void _tracing_on_modify(Environment *, Fact *, Fact *, void *);
+extern "Python" void _fact_event_on_assert(Environment *, void *, void *);
+extern "Python" void _fact_event_on_retract(Environment *, void *, void *);
+extern "Python" void _fact_event_on_modify(Environment *, Fact *, Fact *, void *);
 bool AddRouter(Environment *, const char *, int, RouterQueryFunction *,
                RouterWriteFunction *, RouterReadFunction *,
                RouterUnreadFunction *, RouterExitFunction *, void *);

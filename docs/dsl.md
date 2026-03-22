@@ -1280,6 +1280,78 @@ env.disable_tracing()
 When tracing is disabled (the default), there is zero overhead: no implicit
 bindings, no callbacks, no `RuleFiring` facts.
 
+## Fact lifecycle events
+
+When fact events are enabled, every assert, retract, and modify generates a
+corresponding meta-fact that rules can match against. This enables reactive
+patterns like running aggregates, audit logs, and change-driven workflows.
+
+### Enabling fact events
+
+```python
+env = Environment()
+env.enable_fact_events()
+```
+
+### Event templates
+
+Three templates are registered:
+
+| Template | Slots | When |
+|----------|-------|------|
+| `FactAsserted` | `fact` (FACT-ADDRESS), `template` (SYMBOL) | After a fact is asserted |
+| `FactRetracted` | `index` (INTEGER), `template` (SYMBOL), `ppform` (STRING) | Before a fact is retracted |
+| `FactModified` | `fact` (FACT-ADDRESS), `old_index` (INTEGER), `old_ppform` (STRING), `template` (SYMBOL) | After a fact is modified |
+
+For `FactAsserted`, the `fact` slot is a live fact address: you can read its
+slots directly. For `FactRetracted`, the fact is captured as its pretty-printed
+form and index (the fact address is invalid after retraction). For
+`FactModified`, `fact` points to the updated (current) fact and `old_ppform`
+captures the pre-modification state.
+
+```python
+env.enable_fact_events()
+env.build('(deftemplate item (slot name) (slot qty))')
+env.reset()
+
+f = env.assert_string('(item (name apple) (qty 5))')
+f.retract()
+
+events = [f for f in env.facts() if f.template.name == 'FactRetracted']
+event = events[0]
+event['ppform']  # contains 'apple' and '5'
+```
+
+Meta-facts are excluded from generating their own events (no infinite
+recursion). Internal templates (names starting with `__`) and implied facts
+are also excluded.
+
+### Rules reacting to events
+
+```python
+env.build(
+    '(defrule on-item-added'
+    ' (FactAsserted (template item))'
+    ' =>'
+    ' (assert (log (msg "item added"))))')
+```
+
+### Modify events
+
+Modify events are deferred: the `FactModified` meta-fact is asserted at the
+start of the next `env.run()` call (asserting during a modify callback is not
+safe in CLIPS). If you modify a fact and immediately iterate `env.facts()`
+without calling `env.run()`, the `FactModified` event won't be visible yet.
+
+### Disabling
+
+```python
+env.disable_fact_events()
+```
+
+Fact events and tracing can be enabled simultaneously (they use separate
+callback registrations).
+
 ## Limitations
 
 - **Source must be in a file.** The parser uses `inspect.getsource()`, so rules
