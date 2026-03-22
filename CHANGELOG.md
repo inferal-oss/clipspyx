@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-03-22
+
 ### Added
 
 - Async run cancellation: `halt_async()` for internal (rule-driven) cancellation,
@@ -110,7 +112,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `git apply` patch failure on Windows due to CRLF corruption ([989e154](https://github.com/inferal-oss/clipspyx/commit/989e154), [f95829d](https://github.com/inferal-oss/clipspyx/commit/f95829d))
 - Linux wheels rejected by PyPI due to `linux_x86_64` platform tag ([233faa3](https://github.com/inferal-oss/clipspyx/commit/233faa3))
 
-[Unreleased]: https://github.com/inferal-oss/clipspyx/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/inferal-oss/clipspyx/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/inferal-oss/clipspyx/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/inferal-oss/clipspyx/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/inferal-oss/clipspyx/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/inferal-oss/clipspyx/compare/v0.2.0...v0.3.0
