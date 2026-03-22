@@ -10,6 +10,7 @@ from clipspyx.dsl.ir import (
     SlotConstraint, Var, Wildcard, Literal,
     MultifieldWildcard, MultifieldVar,
     NotConstraint, OrConstraint, AndConstraint, PredicateConstraint,
+    ReturnValueConstraint, FuncCallConstraint,
     SlotValue, AssertEffect, RetractEffect, ModifyEffect,
     OrderingConstraint,
 )
@@ -379,6 +380,20 @@ def _parse_constraint(node, bound_vars):
             bound_vars.add(var_name)
             return PredicateConstraint(var=var_name, clips_expr=expr_str)
 
+    # Binary arithmetic: x + y -> ReturnValueConstraint =(+ ?x ?y)
+    if isinstance(node, cst.BinaryOperation):
+        expr = _atom_to_clips(node, bound_vars)
+        return ReturnValueConstraint(clips_expr=expr)
+
+    # Function call (non-Symbol, non-Template): f(x) -> FuncCallConstraint
+    if (isinstance(node, cst.Call)
+            and isinstance(node.func, cst.Name)
+            and node.func.value != 'Symbol'
+            and not _is_template_call(node)):
+        func_name = node.func.value
+        args = [_atom_to_clips(arg.value, bound_vars) for arg in node.args]
+        return FuncCallConstraint(func_name=func_name, args=args)
+
     return Wildcard()
 
 
@@ -509,6 +524,13 @@ def _atom_to_clips(node, bound_vars) -> str:
         right = _atom_to_clips(node.right, bound_vars)
         op = _binop_to_clips(node.operator)
         return f'({op} {left} {right})'
+    # Generic function call: func(a, b) -> (func ?a ?b)
+    if (isinstance(node, cst.Call)
+            and isinstance(node.func, cst.Name)
+            and node.func.value != 'Symbol'):
+        func_name = node.func.value
+        args = ' '.join(_atom_to_clips(arg.value, bound_vars) for arg in node.args)
+        return f'({func_name} {args})'
     return '?'
 
 

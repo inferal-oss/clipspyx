@@ -100,6 +100,29 @@ class PredicateConstraint:
         return f'?{self.var}&:({self.clips_expr})'
 
 
+@dataclass
+class ReturnValueConstraint:
+    clips_expr: str
+
+    def to_clips(self) -> str:
+        return f'={self.clips_expr}'
+
+
+@dataclass
+class FuncCallConstraint:
+    """Return-value constraint for a function call. Resolved at define time."""
+    func_name: str
+    args: list[str]
+    registered_name: str = ''
+
+    def to_clips(self) -> str:
+        if self.registered_name:
+            args_str = ' '.join(self.args)
+            return f'=(python-function {self.registered_name} {args_str})'
+        args_str = ' '.join(self.args)
+        return f'=({self.func_name} {args_str})'
+
+
 # --- Rule IR: Conditional elements ---
 
 @dataclass

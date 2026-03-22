@@ -475,6 +475,93 @@ Person(name=name and name != "Admin")
 # (name ?name&:(neq ?name "Admin"))
 ```
 
+### Return-value constraint (arithmetic)
+
+Arithmetic expressions in a slot position become CLIPS return-value constraints.
+The expression is evaluated at match time, not at rule definition time:
+
+```python
+class ComputeArea(Rule):
+    Rect(width=w, height=h)
+    Result(area=w * h)
+
+    def __action__(self):
+        print(f"Area matches: {self.w} x {self.h}")
+```
+
+```clips
+(mod.Rect (width ?w) (height ?h))
+(mod.Result (area =(* ?w ?h)))
+```
+
+All Python arithmetic operators are supported:
+
+| Python | CLIPS |
+|--------|-------|
+| `x + y` | `=(+ ?x ?y)` |
+| `x - y` | `=(- ?x ?y)` |
+| `x * y` | `=(* ?x ?y)` |
+| `x / y` | `=(/ ?x ?y)` |
+| `x % y` | `=(mod ?x ?y)` |
+
+Expressions can be nested and mix variables with literals:
+
+```python
+Result(value=(x + y) * z)      # =(* (+ ?x ?y) ?z)
+Result(value=x + 100)          # =(+ ?x 100)
+Result(value=x * 1.5)          # =(* ?x 1.5)
+```
+
+Return-value constraints work in backward chaining patterns too. When CLIPS
+generates a goal, it evaluates the expression with the current variable
+bindings and stores the computed result in the goal slot (not UQV):
+
+```python
+class NeedTarget(Rule):
+    Schedule(synced_at=sa)
+    Config(interval=iv)
+    Target(next_time=sa + iv)   # goal gets computed value, e.g. 1300
+
+    def __action__(self):
+        pass
+```
+
+### Return-value constraint (function calls)
+
+CLIPS built-in functions can be called directly in slot positions:
+
+```python
+Result(value=abs(x))           # =(abs ?x)
+Result(value=max(x, y))        # =(max ?x ?y)
+Result(value=x + abs(y))       # =(+ ?x (abs ?y))
+```
+
+Python functions are also supported. When the DSL encounters a function call
+that resolves to a Python callable in the rule's module scope, it
+auto-registers the function via the `python-function` bridge at `env.define()`
+time. No manual `define_function()` call is needed:
+
+```python
+def next_sync_time(synced_at, interval):
+    return synced_at + interval
+
+class DetectStale(Rule):
+    Schedule(synced_at=sa)
+    Config(interval=iv)
+    Target(time=next_sync_time(sa, iv))
+
+    def __action__(self):
+        pass
+
+env = Environment()
+# ... define templates ...
+env.define(DetectStale)  # auto-registers next_sync_time
+```
+
+The function is resolved from the module's global namespace at define time. It
+must be a callable (not a class or module). Python built-ins like `abs` are
+NOT resolved this way: they map to CLIPS built-in functions of the same name.
+
 ## Multifield patterns
 
 For multislot matching, the DSL uses Python's `...` (Ellipsis) for multifield
@@ -832,6 +919,9 @@ they are defined (forward references are resolved at `define()` time).
 | `not "Bob"` | `~"Bob"` | Field: slot is not this value |
 | `25 or 30 or 35` | `25\|30\|35` | Field: one of these values |
 | `x and x > 5` | `?x&:(> ?x 5)` | Field: bind + predicate |
+| `x + y` | `=(+ ?x ?y)` | Field: return-value constraint |
+| `abs(x)` | `=(abs ?x)` | Field: CLIPS function call |
+| `my_func(x)` | `=(python-function ... ?x)` | Field: Python function (auto-registered) |
 | `_` | `?` | Field: anonymous wildcard |
 | `...` | `$?` | Multifield: zero or more fields |
 | `(*h,)` | `$?h` | Multifield: bind all fields |

@@ -1,7 +1,7 @@
 from clipspyx.common import CLIPS_MAJOR
 from clipspyx.dsl.ir import (
     TemplateDef, RuleDef, GoalCE, ExplicitCE,
-    RetractEffect, ModifyEffect,
+    RetractEffect, ModifyEffect, FuncCallConstraint,
 )
 from clipspyx.dsl.codegen import generate_deftemplate, generate_defrule, generate_typecheck_rule
 
@@ -229,6 +229,29 @@ def _define_rule(env, cls, rdef: RuleDef):
             else:
                 env.define_function(noop_bridge,
                                     name=rdef.action_func_name)
+
+    # Auto-register Python callables for FuncCallConstraint nodes
+    import sys
+    module_dict = sys.modules.get(cls.__module__, None)
+    module_globals = module_dict.__dict__ if module_dict else {}
+
+    for ce in rdef.conditions:
+        pattern = ce.pattern if hasattr(ce, 'pattern') else ce
+        if not hasattr(pattern, 'slots'):
+            continue
+        for slot in pattern.slots:
+            constraint = slot.constraint
+            # Handle both single constraints and lists (multifield)
+            constraints = constraint if isinstance(constraint, list) else [constraint]
+            for c in constraints:
+                if isinstance(c, FuncCallConstraint):
+                    func = module_globals.get(c.func_name)
+                    if callable(func) and not isinstance(func, type):
+                        unique_id = f"__rvc_{rdef.name}_{c.func_name}"
+                        from clipspyx.common import environment_data
+                        user_functions = environment_data(env._env, 'user_functions')
+                        user_functions.functions[unique_id] = func
+                        c.registered_name = unique_id
 
     tracing = (getattr(env, '_tracing_state', None) is not None
                and env._tracing_state.enabled)

@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Return-value constraints in DSL pattern slots: arithmetic expressions
+  (`x + y`, `x * 2`, `(x + y) * z`) compile to CLIPS `=(expr)` syntax,
+  enabling computed slot matching and backward chaining with evaluated values
+- Function calls in DSL pattern slots: CLIPS built-ins like `abs(x)` compile
+  to `=(abs ?x)` directly; Python functions are auto-registered at
+  `env.define()` time via the `python-function` bridge with no manual
+  `define_function()` step needed
+
 ## [0.4.0] - 2026-03-22
 
 ### Added

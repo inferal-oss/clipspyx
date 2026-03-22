@@ -10,6 +10,7 @@ from clipspyx.dsl.ir import (
     NotCE, OrCE, ExistsCE, ForallCE, LogicalCE, GoalCE, ExplicitCE,
     SlotConstraint, Var, Wildcard, Literal,
     NotConstraint, OrConstraint, PredicateConstraint,
+    ReturnValueConstraint, FuncCallConstraint,
     SlotValue, AssertEffect, RetractEffect, ModifyEffect,
 )
 from clipspyx.dsl.codegen import generate_deftemplate, generate_defrule, generate_typecheck_rule
@@ -2301,6 +2302,273 @@ class TestOrderingEndToEnd(unittest.TestCase):
         # A1 and A2 should both fire before B
         self.assertIn('A1', results[:2])
         self.assertIn('A2', results[:2])
+
+
+# --- Templates for return-value constraint tests ---
+
+class NumPair(Template):
+    x: int
+    y: int
+
+class NumTriple(Template):
+    x: int
+    y: int
+    z: int
+
+class NumResult(Template):
+    value: int
+
+class FloatPair(Template):
+    x: float
+    y: float
+
+class FloatResult(Template):
+    value: float
+
+
+# --- Return-value constraint: arithmetic ---
+
+class AddRule(Rule):
+    NumPair(x=x, y=y)
+    NumResult(value=x + y)
+
+class SubRule(Rule):
+    NumPair(x=x, y=y)
+    NumResult(value=x - y)
+
+class MulRule(Rule):
+    NumPair(x=x, y=y)
+    NumResult(value=x * y)
+
+class DivRule(Rule):
+    FloatPair(x=x, y=y)
+    FloatResult(value=x / y)
+
+class ModRule(Rule):
+    NumPair(x=x, y=y)
+    NumResult(value=x % y)
+
+class NestedArithRule(Rule):
+    NumTriple(x=x, y=y, z=z)
+    NumResult(value=(x + y) * z)
+
+class VarPlusLiteralRule(Rule):
+    Person(age=age)
+    NumResult(value=age + 100)
+
+
+class TestReturnValueConstraintIR(unittest.TestCase):
+    """Return-value constraints produce correct IR."""
+
+    def _get_slot(self, rule_cls, template_name, slot_name):
+        rdef = rule_cls.__clipspyx_dsl__
+        for ce in rdef.conditions:
+            p = ce.pattern if hasattr(ce, 'pattern') else ce
+            if hasattr(p, 'template_name') and p.template_name.endswith(template_name):
+                for s in p.slots:
+                    if s.name == slot_name:
+                        return s.constraint
+        self.fail(f"Slot {slot_name} not found in {template_name}")
+
+    def test_addition(self):
+        c = self._get_slot(AddRule, 'NumResult', 'value')
+        self.assertIsInstance(c, ReturnValueConstraint)
+        self.assertEqual(c.to_clips(), '=(+ ?x ?y)')
+
+    def test_subtraction(self):
+        c = self._get_slot(SubRule, 'NumResult', 'value')
+        self.assertIsInstance(c, ReturnValueConstraint)
+        self.assertEqual(c.to_clips(), '=(- ?x ?y)')
+
+    def test_multiplication(self):
+        c = self._get_slot(MulRule, 'NumResult', 'value')
+        self.assertIsInstance(c, ReturnValueConstraint)
+        self.assertEqual(c.to_clips(), '=(* ?x ?y)')
+
+    def test_division(self):
+        c = self._get_slot(DivRule, 'FloatResult', 'value')
+        self.assertIsInstance(c, ReturnValueConstraint)
+        self.assertEqual(c.to_clips(), '=(/ ?x ?y)')
+
+    def test_modulo(self):
+        c = self._get_slot(ModRule, 'NumResult', 'value')
+        self.assertIsInstance(c, ReturnValueConstraint)
+        self.assertEqual(c.to_clips(), '=(mod ?x ?y)')
+
+    def test_nested(self):
+        c = self._get_slot(NestedArithRule, 'NumResult', 'value')
+        self.assertIsInstance(c, ReturnValueConstraint)
+        self.assertEqual(c.to_clips(), '=(* (+ ?x ?y) ?z)')
+
+    def test_var_plus_literal(self):
+        c = self._get_slot(VarPlusLiteralRule, 'NumResult', 'value')
+        self.assertIsInstance(c, ReturnValueConstraint)
+        self.assertEqual(c.to_clips(), '=(+ ?age 100)')
+
+
+# --- Return-value constraint: function calls ---
+
+class AbsRule(Rule):
+    Person(age=age)
+    NumResult(value=abs(age))
+
+class MaxRule(Rule):
+    NumPair(x=x, y=y)
+    NumResult(value=max(x, y))
+
+class NestedFuncRule(Rule):
+    NumPair(x=x, y=y)
+    NumResult(value=x + abs(y))
+
+
+class TestFuncCallConstraintIR(unittest.TestCase):
+    """Function calls in pattern slots produce correct IR."""
+
+    def _get_slot(self, rule_cls, template_name, slot_name):
+        rdef = rule_cls.__clipspyx_dsl__
+        for ce in rdef.conditions:
+            p = ce.pattern if hasattr(ce, 'pattern') else ce
+            if hasattr(p, 'template_name') and p.template_name.endswith(template_name):
+                for s in p.slots:
+                    if s.name == slot_name:
+                        return s.constraint
+        self.fail(f"Slot {slot_name} not found in {template_name}")
+
+    def test_abs(self):
+        c = self._get_slot(AbsRule, 'NumResult', 'value')
+        self.assertIsInstance(c, FuncCallConstraint)
+        self.assertEqual(c.func_name, 'abs')
+        self.assertEqual(c.args, ['?age'])
+
+    def test_max(self):
+        c = self._get_slot(MaxRule, 'NumResult', 'value')
+        self.assertIsInstance(c, FuncCallConstraint)
+        self.assertEqual(c.func_name, 'max')
+        self.assertEqual(c.args, ['?x', '?y'])
+
+    def test_nested_func_in_arithmetic(self):
+        """x + abs(y) produces ReturnValueConstraint with nested function."""
+        c = self._get_slot(NestedFuncRule, 'NumResult', 'value')
+        self.assertIsInstance(c, ReturnValueConstraint)
+        self.assertEqual(c.to_clips(), '=(+ ?x (abs ?y))')
+
+
+class TestReturnValueConstraintCLIPS(unittest.TestCase):
+    """Return-value constraints compile to correct CLIPS ppforms."""
+
+    def setUp(self):
+        self.env = Environment()
+        for cls in [NumPair, NumTriple, NumResult, FloatPair, FloatResult, Person]:
+            self.env.define(cls)
+
+    def _ppform(self, rule_cls):
+        self.env.define(rule_cls)
+        rule = [r for r in self.env.rules() if r.name.endswith(rule_cls.__name__)][0]
+        return str(rule)
+
+    def test_addition_ppform(self):
+        pp = self._ppform(AddRule)
+        self.assertIn('=(+ ?x ?y)', pp)
+
+    def test_subtraction_ppform(self):
+        pp = self._ppform(SubRule)
+        self.assertIn('=(- ?x ?y)', pp)
+
+    def test_multiplication_ppform(self):
+        pp = self._ppform(MulRule)
+        self.assertIn('=(* ?x ?y)', pp)
+
+    def test_division_ppform(self):
+        pp = self._ppform(DivRule)
+        self.assertIn('=(/ ?x ?y)', pp)
+
+    def test_modulo_ppform(self):
+        pp = self._ppform(ModRule)
+        self.assertIn('=(mod ?x ?y)', pp)
+
+    def test_nested_ppform(self):
+        pp = self._ppform(NestedArithRule)
+        self.assertIn('=(* (+ ?x ?y) ?z)', pp)
+
+    def test_var_plus_literal_ppform(self):
+        pp = self._ppform(VarPlusLiteralRule)
+        self.assertIn('=(+ ?age 100)', pp)
+
+    def test_abs_ppform(self):
+        pp = self._ppform(AbsRule)
+        self.assertIn('=(abs ?age)', pp)
+
+    def test_max_ppform(self):
+        pp = self._ppform(MaxRule)
+        self.assertIn('=(max ?x ?y)', pp)
+
+    def test_nested_func_ppform(self):
+        pp = self._ppform(NestedFuncRule)
+        self.assertIn('=(+ ?x (abs ?y))', pp)
+
+
+# --- Python function auto-registration ---
+
+def _double_it(n):
+    return n * 2
+
+class DoubleCheckRule(Rule):
+    Person(age=age)
+    NumResult(value=_double_it(age))
+    def __action__(self):
+        pass
+
+
+class TestPythonFuncAutoRegistration(unittest.TestCase):
+    """Python functions in pattern slots are auto-registered at define time."""
+
+    def test_ir_is_func_call_constraint(self):
+        rdef = DoubleCheckRule.__clipspyx_dsl__
+        for ce in rdef.conditions:
+            p = ce.pattern if hasattr(ce, 'pattern') else ce
+            if hasattr(p, 'template_name') and p.template_name.endswith('NumResult'):
+                for s in p.slots:
+                    if s.name == 'value':
+                        self.assertIsInstance(s.constraint, FuncCallConstraint)
+                        self.assertEqual(s.constraint.func_name, '_double_it')
+                        return
+        self.fail("FuncCallConstraint not found")
+
+    def test_ppform_has_python_function_bridge(self):
+        env = Environment()
+        env.define(Person)
+        env.define(NumResult)
+        env.define(DoubleCheckRule)
+        rule = [r for r in env.rules()
+                if r.name.endswith('DoubleCheckRule')][0]
+        pp = str(rule)
+        self.assertIn('python-function', pp)
+
+    def test_forward_matching(self):
+        env = Environment()
+        NewPerson = env.define(Person)
+        NewResult = env.define(NumResult)
+        env.define(DoubleCheckRule)
+        env.reset()
+        NewPerson(name='test', age=5)
+        NewResult(value=10)  # _double_it(5) == 10
+        activations = [str(a) for a in env.activations()]
+        self.assertTrue(
+            any('DoubleCheckRule' in a for a in activations),
+            f"DoubleCheckRule not activated: {activations}")
+
+    def test_no_match_on_wrong_value(self):
+        env = Environment()
+        NewPerson = env.define(Person)
+        NewResult = env.define(NumResult)
+        env.define(DoubleCheckRule)
+        env.reset()
+        NewPerson(name='test', age=5)
+        NewResult(value=99)  # 99 != _double_it(5)
+        activations = [str(a) for a in env.activations()]
+        self.assertFalse(
+            any('DoubleCheckRule' in a for a in activations),
+            f"DoubleCheckRule should NOT be activated: {activations}")
 
 
 if __name__ == '__main__':
