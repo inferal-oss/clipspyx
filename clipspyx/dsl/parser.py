@@ -495,6 +495,14 @@ def _atom_to_clips(node, bound_vars) -> str:
             return f'-{inner.value}'
         if isinstance(inner, cst.Float):
             return f'-{inner.value}'
+    # Symbol("...") -> unquoted CLIPS symbol
+    if (isinstance(node, cst.Call)
+            and isinstance(node.func, cst.Name)
+            and node.func.value == 'Symbol'
+            and node.args
+            and isinstance(node.args[0].value,
+                           (cst.SimpleString, cst.ConcatenatedString))):
+        return _extract_string(node.args[0].value)
     # Binary arithmetic
     if isinstance(node, cst.BinaryOperation):
         left = _atom_to_clips(node.left, bound_vars)

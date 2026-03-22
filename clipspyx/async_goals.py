@@ -1,0 +1,226 @@
+"""Async goal handler framework for CLIPS 7.0x backward chaining.
+
+When rules generate goals via backward chaining, the async run loop dispatches
+them to registered Python async handlers. Handlers fulfill goals by asserting
+facts. Timers are the first built-in handler type.
+
+"""
+
+import asyncio
+import time as _time
+from dataclasses import dataclass, field
+
+from clipspyx.common import CLIPS_MAJOR
+from clipspyx.values import Symbol
+from clipspyx.dsl.timer import AFTER, AT, EVERY  # re-export
+
+
+# ---------------------------------------------------------------------------
+# Exceptions
+# ---------------------------------------------------------------------------
+
+class GoalHandlerError(Exception):
+    """Raised when an async goal handler fails."""
+
+
+# ---------------------------------------------------------------------------
+# Per-environment state
+# ---------------------------------------------------------------------------
+
+@dataclass
+class GoalHandlerState:
+    handlers: dict = field(default_factory=dict)        # template_name -> async callable
+    pending: dict = field(default_factory=dict)          # goal_index -> asyncio.Task
+    periodic_facts: dict = field(default_factory=dict)   # timer name -> (fact, count)
+
+
+# ---------------------------------------------------------------------------
+# Timer-event deftemplate
+# ---------------------------------------------------------------------------
+
+TIMER_EVENT_DEFTEMPLATE = """\
+(deftemplate timer-event
+  (slot kind (type SYMBOL))
+  (slot name (type SYMBOL))
+  (slot seconds (type FLOAT) (default 0.0))
+  (slot time (type FLOAT) (default 0.0))
+  (slot count (type INTEGER) (default 0))
+  (slot fired_at (type FLOAT) (default 0.0)))"""
+
+
+# ---------------------------------------------------------------------------
+# Built-in timer handler
+# ---------------------------------------------------------------------------
+
+async def _timer_handler(goal, env):
+    """Handle timer-event goals by sleeping and asserting the matching fact."""
+    kind = str(goal['kind'])
+    name = str(goal['name'])
+    state = env._goal_handler_state
+
+    # Read only the slots relevant to this kind.
+    # Unspecified goal slots have universally quantified values (type 12)
+    # which cannot be converted to Python values.
+    seconds = 0.0
+    target_time = 0.0
+
+    if kind == 'at':
+        target_time = float(goal['time'])
+        sleep_for = max(0, target_time - _time.time())
+    else:
+        seconds = float(goal['seconds'])
+        sleep_for = seconds
+
+    await asyncio.sleep(sleep_for)
+
+    # Determine count (increment for periodic)
+    count = 0
+    if kind == 'every' and name in state.periodic_facts:
+        count = state.periodic_facts[name][1] + 1
+
+    # Assert the timer-event fact
+    tpl = env.find_template('timer-event')
+    fact = tpl.assert_fact(
+        kind=Symbol(kind), name=Symbol(name),
+        seconds=seconds, time=target_time,
+        count=count, fired_at=_time.time())
+
+    # Track periodic facts for auto-retract
+    if kind == 'every':
+        state.periodic_facts[name] = (fact, count)
+
+
+# ---------------------------------------------------------------------------
+# Auto-retract helper for periodic timers
+# ---------------------------------------------------------------------------
+
+def _retract_periodic_facts(env, state):
+    """Retract timer-event facts from periodic timers so goals regenerate."""
+    for name, (fact, _count) in list(state.periodic_facts.items()):
+        if fact.exists:
+            fact.retract()
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def enable_goal_handlers(env):
+    """Enable the async goal handler framework for the given environment.
+
+    Registers the timer-event deftemplate and the built-in timer handler.
+    Must be called before async_run() or register_goal_handler().
+
+    Requires CLIPS 7.0x (goals are a 7.0x feature).
+    """
+    if CLIPS_MAJOR < 7:
+        raise TypeError("Async goal handlers require CLIPS 7.0 or later")
+
+    # Build the timer-event template
+    env.build(TIMER_EVENT_DEFTEMPLATE)
+
+    # Create and store state
+    state = GoalHandlerState()
+    state.handlers['timer-event'] = _timer_handler
+    env._goal_handler_state = state
+
+
+def disable_goal_handlers(env):
+    """Disable the async goal handler framework and cancel pending tasks."""
+    state = getattr(env, '_goal_handler_state', None)
+    if state is None:
+        return
+
+    # Cancel all pending handler tasks
+    for task in state.pending.values():
+        task.cancel()
+    state.pending.clear()
+    state.periodic_facts.clear()
+
+    env._goal_handler_state = None
+
+
+def register_goal_handler(env, template, handler):
+    """Register an async handler for goals matching a template.
+
+    ``template`` can be a DSL Template class or a CLIPS template name string.
+
+    The handler is an async callable with signature:
+        async def handler(goal, env) -> None
+
+    The handler receives the goal (a TemplateFact) and the Environment.
+    It should assert facts to satisfy the goal.
+    """
+    state = env._goal_handler_state
+    if state is None:
+        raise RuntimeError("Call enable_goal_handlers(env) first")
+    if isinstance(template, str):
+        name = template
+    else:
+        name = template.__clipspyx_dsl__.name
+    state.handlers[name] = handler
+
+
+async def async_run(env, limit=None, max_cycles=None):
+    """Run the CLIPS engine with async goal handler processing.
+
+    Interleaves synchronous CLIPS execution with async event processing:
+    1. Run CLIPS until agenda is empty
+    2. Scan goals for registered handlers
+    3. Dispatch matching goals to async handlers
+    4. Wait for at least one handler to complete
+    5. Loop back to step 1
+
+    Returns when no goals remain and no handlers are pending,
+    or when max_cycles is reached.
+    """
+    state = env._goal_handler_state
+    if state is None:
+        raise RuntimeError("Call enable_goal_handlers(env) first")
+
+    cycle = 0
+    while max_cycles is None or cycle < max_cycles:
+        cycle += 1
+        # Run CLIPS synchronously (process agenda).
+        # This fires rules that matched facts asserted by handlers
+        # in the previous cycle.
+        env.run(limit)
+
+        # Auto-retract periodic timer-event facts AFTER run() processes them,
+        # so goals regenerate for the next cycle.
+        _retract_periodic_facts(env, state)
+
+        # Scan goals for new dispatches
+        for goal in env.goals():
+            idx = goal.index
+            if idx in state.pending:
+                continue
+            handler = state.handlers.get(goal.template.name)
+            if handler is not None:
+                task = asyncio.create_task(handler(goal, env))
+                state.pending[idx] = task
+
+        # Cancel tasks for retracted goals
+        for idx in list(state.pending):
+            try:
+                env.find_goal(idx)
+            except LookupError:
+                state.pending.pop(idx).cancel()
+
+        if not state.pending:
+            break  # no goals, no pending tasks -> done
+
+        # Wait for at least one handler to complete
+        done, _ = await asyncio.wait(
+            state.pending.values(), return_when=asyncio.FIRST_COMPLETED)
+
+        # Process completed tasks
+        for task in done:
+            # Remove from pending
+            for idx, t in list(state.pending.items()):
+                if t is task:
+                    del state.pending[idx]
+                    break
+            if not task.cancelled() and task.exception():
+                raise GoalHandlerError(
+                    f"Handler failed: {task.exception()}") from task.exception()

@@ -20,6 +20,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `*name` for multifield variables, tuple syntax for sequence patterns
   (`(*before, "chess", *after)`); works in both LHS patterns and
   declarative effects
+- Async goal handler framework (CLIPS 7.0x): `env.enable_goal_handlers()`
+  enables an asyncio-based run loop (`await env.async_run()`) that dispatches
+  backward chaining goals to registered Python async handlers; built-in
+  `TimerEvent` template supports one-shot (`after`), absolute (`at`), and
+  periodic (`every`) timers; custom handlers registered via
+  `env.register_goal_handler(TemplateClass, handler)` accept DSL Template
+  classes or CLIPS name strings; cancellation via controlling fact retraction
+- `Symbol("...")` literals now work in declarative effects (`asserts`,
+  `modifies`); previously fell through to wildcard `?` in effect codegen
 
 ## [0.3.0] - 2026-03-21
 

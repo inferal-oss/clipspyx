@@ -65,4 +65,14 @@ from clipspyx.common import CLIPS_MAJOR
 
 if CLIPS_MAJOR >= 7:
     from clipspyx.tables import Deftable
-    __all__ = __all__ + ('Deftable',)
+    from clipspyx.async_goals import (
+        GoalHandlerError, enable_goal_handlers, disable_goal_handlers,
+        AFTER, AT, EVERY,
+    )
+    from clipspyx.dsl.timer import TimerEvent
+    __all__ = __all__ + ('Deftable',
+                         'GoalHandlerError',
+                         'enable_goal_handlers',
+                         'disable_goal_handlers',
+                         'AFTER', 'AT', 'EVERY',
+                         'TimerEvent')

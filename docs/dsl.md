@@ -350,15 +350,56 @@ class R(Rule):
 
 ### Goal and Explicit CE (CLIPS 7.0x)
 
-For backward chaining:
+For backward chaining. A `goal()` CE tells CLIPS to generate goals for that
+template when other rules need matching facts:
+
+```python
+class GoalHandler(Rule):
+    goal(Person(name=name))
+```
+
+```clips
+(goal (myapp.Person (name ?name)))
+```
+
+When a rule has a regular pattern for `Person` and no matching fact exists,
+CLIPS generates a goal. The goal handler rule activates, enabling the system
+to fulfill the need.
+
+`explicit()` suppresses goal generation for a pattern:
 
 ```python
 class R(Rule):
-    goal(Person(name=name))
-
-class R2(Rule):
     explicit(Person(name=name))
 ```
+
+```clips
+(explicit (myapp.Person (name ?name)))
+```
+
+See [Async Goal Handlers](async-goals.md) for a complete framework that
+dispatches goals to Python async handlers, including built-in timer support.
+
+#### TimerEvent
+
+The `TimerEvent` template is provided for timer-based goals. Import it from
+the DSL module:
+
+```python
+from clipspyx.dsl import TimerEvent
+
+class HandleTimerGoal(Rule):
+    goal(TimerEvent(kind=k, name=n, seconds=s))
+
+class OnTimeout(Rule):
+    te = TimerEvent(
+        kind=Symbol("after"), name=Symbol("my-timeout"), seconds=5.0)
+    asserts(Alert(msg=Symbol("timed-out")))
+```
+
+Timer kinds: `Symbol("after")` (delay), `Symbol("at")` (absolute time),
+`Symbol("every")` (periodic). See [Async Goal Handlers](async-goals.md) for
+full documentation.
 
 ## Slot constraints
 
@@ -808,6 +849,11 @@ they are defined (forward references are resolved at `define()` time).
 | `Fact` | `FACT-ADDRESS` | Slot/multislot type: any fact |
 | `Multi[Fact]` | `(multislot ... (type FACT-ADDRESS))` | Multislot of fact addresses |
 | `env.enable_tracing()` | — | Enable provenance tracking |
+| `TimerEvent(kind=Symbol("after"), ...)` | `(timer-event (kind after) ...)` | Built-in timer template (7.0x) |
+| `AFTER`, `AT`, `EVERY` | — | Timer kind constants (runtime use) |
+| `env.enable_goal_handlers()` | — | Enable async goal framework (7.0x) |
+| `env.register_goal_handler(T, fn)` | — | Register async handler (class or string) |
+| `await env.async_run()` | — | Async event loop with goal dispatch |
 
 ## Module-qualified names
 

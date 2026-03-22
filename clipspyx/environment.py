@@ -53,7 +53,7 @@ class Environment:
     __slots__ = ('_env', '_facts', '_agenda', '_classes',
                  '_modules', '_functions', '_routers', '_tables',
                  '_namespaces', '_dsl_defs', '_ordering_pending',
-                 '_tracing_state')
+                 '_tracing_state', '_goal_handler_state')
 
     def __init__(self):
         self._env = lib.CreateEnvironment()
@@ -63,6 +63,7 @@ class Environment:
         self._dsl_defs = []
         self._ordering_pending = {}
         self._tracing_state = None
+        self._goal_handler_state = None
 
         self._facts = Facts(self._env)
         self._agenda = Agenda(self._env)
@@ -232,6 +233,29 @@ class Environment:
         """Disable fact provenance tracking."""
         from clipspyx.tracing import disable_tracing
         disable_tracing(self)
+
+    def enable_goal_handlers(self):
+        """Enable async goal handler framework (CLIPS 7.0+ only)."""
+        from clipspyx.async_goals import enable_goal_handlers
+        enable_goal_handlers(self)
+
+    def disable_goal_handlers(self):
+        """Disable async goal handler framework."""
+        from clipspyx.async_goals import disable_goal_handlers
+        disable_goal_handlers(self)
+
+    def register_goal_handler(self, template, handler):
+        """Register an async handler for goals matching a template.
+
+        template can be a DSL Template class or a CLIPS template name string.
+        """
+        from clipspyx.async_goals import register_goal_handler
+        register_goal_handler(self, template, handler)
+
+    async def async_run(self, limit=None, max_cycles=None):
+        """Run CLIPS with async goal handler processing."""
+        from clipspyx.async_goals import async_run
+        return await async_run(self, limit, max_cycles)
 
     def clear(self):
         """Clear the CLIPS environment.
