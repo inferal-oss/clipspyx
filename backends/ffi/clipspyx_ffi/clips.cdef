@@ -375,6 +375,19 @@ Deftemplate *GetNextDeftemplate(Environment *, Deftemplate *);
 bool DeftemplateGetWatch(Deftemplate *);
 void DeftemplateSetWatch(Deftemplate *, bool);
 void FactPPForm(Fact *, StringBuilder *, bool);
+
+typedef void VoidCallFunctionWithArg(Environment *, void *, void *);
+typedef void ModifyCallFunction(Environment *, Fact *, Fact *, void *);
+
+bool AddAssertFunction(Environment *, const char *,
+                       VoidCallFunctionWithArg *, int, void *);
+bool RemoveAssertFunction(Environment *, const char *);
+bool AddRetractFunction(Environment *, const char *,
+                        VoidCallFunctionWithArg *, int, void *);
+bool RemoveRetractFunction(Environment *, const char *);
+bool AddModifyFunction(Environment *, const char *,
+                       ModifyCallFunction *, int, void *);
+bool RemoveModifyFunction(Environment *, const char *);
 Deffacts *FindDeffacts(Environment *, const char *);
 Deffacts *GetNextDeffacts(Environment *, Deffacts *);
 const char *DeffactsModule(Deffacts *);
@@ -605,6 +618,9 @@ extern "Python" void write_function(Environment *, const char *, const char *,
 extern "Python" int read_function(Environment *, const char *, void *);
 extern "Python" int unread_function(Environment *, const char *, int, void *);
 extern "Python" void exit_function(Environment *, int, void *);
+extern "Python" void _tracing_on_assert(Environment *, void *, void *);
+extern "Python" void _tracing_on_retract(Environment *, void *, void *);
+extern "Python" void _tracing_on_modify(Environment *, Fact *, Fact *, void *);
 bool AddRouter(Environment *, const char *, int, RouterQueryFunction *,
                RouterWriteFunction *, RouterReadFunction *,
                RouterUnreadFunction *, RouterExitFunction *, void *);

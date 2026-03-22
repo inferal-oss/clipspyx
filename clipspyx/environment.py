@@ -52,7 +52,8 @@ class Environment:
 
     __slots__ = ('_env', '_facts', '_agenda', '_classes',
                  '_modules', '_functions', '_routers', '_tables',
-                 '_namespaces', '_dsl_defs', '_ordering_pending')
+                 '_namespaces', '_dsl_defs', '_ordering_pending',
+                 '_tracing_state')
 
     def __init__(self):
         self._env = lib.CreateEnvironment()
@@ -61,6 +62,7 @@ class Environment:
 
         self._dsl_defs = []
         self._ordering_pending = {}
+        self._tracing_state = None
 
         self._facts = Facts(self._env)
         self._agenda = Agenda(self._env)
@@ -220,6 +222,16 @@ class Environment:
         if output is not None:
             render_d2(d2_text, output, layout=layout)
         return d2_text
+
+    def enable_tracing(self):
+        """Enable fact provenance tracking."""
+        from clipspyx.tracing import enable_tracing
+        enable_tracing(self)
+
+    def disable_tracing(self):
+        """Disable fact provenance tracking."""
+        from clipspyx.tracing import disable_tracing
+        disable_tracing(self)
 
     def clear(self):
         """Clear the CLIPS environment.

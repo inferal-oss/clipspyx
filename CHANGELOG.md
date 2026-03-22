@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Fact provenance tracing: `env.enable_tracing()` records every rule firing as
+  a `RuleFiring` fact with `FACT-ADDRESS` multislots for inputs and outputs;
+  works for both `__action__` and declarative-effect rules; chain is walkable
+  to trace any fact back to its origins
+- `Fact` sentinel type for generic `FACT-ADDRESS` slots and multislots
+  (`Multi[Fact]`); enables templates that reference facts of any template type
+- C-level fact lifecycle callbacks: `AddAssertFunction`, `AddRetractFunction`,
+  `AddModifyFunction` exposed in CFFI bindings (both 6.4x and 7.0x)
+
 ## [0.3.0] - 2026-03-21
 
 ### Added

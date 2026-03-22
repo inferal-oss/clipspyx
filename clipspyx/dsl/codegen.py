@@ -1,4 +1,8 @@
-from clipspyx.dsl.ir import TemplateDef, RuleDef
+from clipspyx.dsl.ir import (
+    TemplateDef, RuleDef,
+    PatternCE, AssignedPatternCE, TestCE,
+    NotCE, ExistsCE, ForallCE, OrCE, LogicalCE, GoalCE, ExplicitCE,
+)
 
 
 def generate_deftemplate(tdef: TemplateDef) -> str:
@@ -21,17 +25,41 @@ def generate_deftemplate(tdef: TemplateDef) -> str:
     return '\n'.join(lines)
 
 
-def generate_defrule(rdef: RuleDef) -> str:
+def generate_defrule(rdef: RuleDef, tracing: bool = False) -> str:
     """Generate a CLIPS defrule string from a RuleDef IR."""
     lines = [f'(defrule {rdef.name}']
 
     if rdef.salience is not None:
         lines.append(f'  (declare (salience {rdef.salience}))')
 
-    for ce in rdef.conditions:
-        lines.append(f'  {ce.to_clips()}')
+    # When tracing, add implicit fact-address bindings for unbound patterns
+    implicit_bindings = []
+    for i, ce in enumerate(rdef.conditions):
+        if tracing and _needs_implicit_binding(ce):
+            var_name = f'_ce{i}'
+            implicit_bindings.append(var_name)
+            lines.append(f'  ?{var_name} <- {ce.to_clips()}')
+        elif tracing and isinstance(ce, AssignedPatternCE):
+            lines.append(f'  {ce.to_clips()}')
+        else:
+            lines.append(f'  {ce.to_clips()}')
 
     lines.append('  =>')
+
+    # When tracing, prepend the trace-begin call before any RHS content
+    if tracing:
+        # Collect all fact-address var names: implicit + explicit, in order
+        trace_vars = []
+        for i, ce in enumerate(rdef.conditions):
+            if isinstance(ce, AssignedPatternCE):
+                trace_vars.append(ce.var_name)
+            elif _needs_implicit_binding(ce):
+                trace_vars.append(f'_ce{i}')
+        if trace_vars:
+            vars_str = ' '.join(f'?{v}' for v in trace_vars)
+            lines.append(f'  (__dsl_trace_begin "{rdef.name}" {vars_str})')
+        else:
+            lines.append(f'  (__dsl_trace_begin "{rdef.name}")')
 
     if rdef.effects:
         # Native CLIPS RHS: emit effect actions directly
@@ -48,6 +76,11 @@ def generate_defrule(rdef: RuleDef) -> str:
 
     lines.append(')')
     return '\n'.join(lines)
+
+
+def _needs_implicit_binding(ce) -> bool:
+    """Return True if this CE type needs an implicit fact-address binding for tracing."""
+    return isinstance(ce, PatternCE)
 
 
 def _build_arg_list(rdef: RuleDef) -> list[str]:

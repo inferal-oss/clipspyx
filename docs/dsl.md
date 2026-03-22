@@ -732,6 +732,9 @@ they are defined (forward references are resolved at `define()` time).
 | `__clips_name__ = "x"` | `(deftemplate x ...)` | Override CLIPS name |
 | `P = env.define(Person)` | — | Bound asserter (primary) |
 | `Person(__env__=env, ...)` | — | Direct assertion (fallback) |
+| `Fact` | `FACT-ADDRESS` | Slot/multislot type: any fact |
+| `Multi[Fact]` | `(multislot ... (type FACT-ADDRESS))` | Multislot of fact addresses |
+| `env.enable_tracing()` | — | Enable provenance tracking |
 
 ## Module-qualified names
 
@@ -940,6 +943,133 @@ produces cleaner layouts for complex diagrams. Pass `layout="dagre"` to use
 the dagre engine instead.
 
 See `examples/hr_system.py` for a complete example.
+
+## Fact provenance tracing
+
+When tracing is enabled, clipspyx automatically records which facts each rule
+consumed and produced. Every rule firing creates a `RuleFiring` fact containing
+the rule name, input facts (from the LHS), and output facts (asserted on the
+RHS). This works for both `__action__` and declarative-effect rules.
+
+### Enabling tracing
+
+```python
+from clipspyx import Environment
+from clipspyx.dsl import Template, Rule
+from clipspyx.tracing import RuleFiring
+
+env = Environment()
+env.enable_tracing()
+
+# define templates and rules as usual...
+```
+
+Call `env.enable_tracing()` before defining rules. This registers the
+`RuleFiring` template and installs C-level callbacks that track fact assertions
+during rule execution.
+
+### RuleFiring facts
+
+Each rule firing produces a `RuleFiring` fact with three slots:
+
+| Slot | Type | Description |
+|------|------|-------------|
+| `rule` | `SYMBOL` | Qualified name of the rule that fired |
+| `inputs` | `FACT-ADDRESS` multislot | Facts that matched the rule's LHS |
+| `outputs` | `FACT-ADDRESS` multislot | Facts asserted during the rule's RHS |
+
+```python
+env.run()
+
+for f in env.facts():
+    if f.template.name == 'RuleFiring':
+        print(f"Rule: {f['rule']}")
+        print(f"  Inputs:  {[i.index for i in f['inputs']]}")
+        print(f"  Outputs: {[o.index for o in f['outputs']]}")
+```
+
+### Walking the provenance chain
+
+Since inputs and outputs are fact addresses, you can trace any fact back to its
+origins:
+
+```python
+def trace_origins(env, fact):
+    """Walk RuleFiring facts backwards to find all ancestor facts."""
+    firings = [f for f in env.facts() if f.template.name == 'RuleFiring']
+    visited = set()
+    queue = [fact.index]
+    chain = []
+
+    while queue:
+        idx = queue.pop(0)
+        if idx in visited:
+            continue
+        visited.add(idx)
+        for firing in firings:
+            if idx in [o.index for o in firing['outputs']]:
+                chain.append(firing)
+                for inp in firing['inputs']:
+                    queue.append(inp.index)
+    return chain
+```
+
+### Using RuleFiring in DSL rules
+
+`RuleFiring` is a standard DSL Template. Import it from `clipspyx.tracing` and
+use it in your own rules to reason about provenance in-engine:
+
+```python
+from clipspyx.tracing import RuleFiring
+
+class CountFirings(Rule):
+    RuleFiring(rule=rule_name)
+
+    def __action__(self):
+        print(f"Rule fired: {self.rule_name}")
+```
+
+### The Fact type
+
+The `Fact` sentinel type enables `FACT-ADDRESS` typed slots and multislots for
+any template, not just references to a specific template:
+
+```python
+from clipspyx.dsl import Template, Multi, Fact
+
+class FactPair(Template):
+    left: Fact       # single FACT-ADDRESS slot (any template)
+    right: Fact
+
+class FactBag(Template):
+    items: Multi[Fact]  # FACT-ADDRESS multislot
+```
+
+### How it works
+
+When tracing is enabled:
+
+1. The DSL injects implicit fact-address bindings (`?_ce0 <-`, etc.) for
+   unassigned patterns so every matched fact has a variable
+2. A `__dsl_trace_begin` bridge call is prepended to every rule's RHS, passing
+   the rule name and all input fact addresses
+3. A C-level `AddAssertFunction` callback captures every fact asserted during
+   the RHS as an output
+4. When the next rule fires (or `run()` returns), the accumulated inputs and
+   outputs are asserted as a `RuleFiring` fact
+
+This mechanism is uniform: it works identically for `__action__` rules and
+declarative effects. `RuleFiring` facts themselves are excluded from tracing
+to prevent infinite recursion.
+
+### Disabling tracing
+
+```python
+env.disable_tracing()
+```
+
+When tracing is disabled (the default), there is zero overhead: no implicit
+bindings, no callbacks, no `RuleFiring` facts.
 
 ## Limitations
 

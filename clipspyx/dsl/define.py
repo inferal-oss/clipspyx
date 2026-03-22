@@ -215,5 +215,7 @@ def _define_rule(env, cls, rdef: RuleDef):
                 pass
             env.define_function(noop_bridge, name=rdef.action_func_name)
 
-    clips_str = generate_defrule(rdef)
+    tracing = (getattr(env, '_tracing_state', None) is not None
+               and env._tracing_state.enabled)
+    clips_str = generate_defrule(rdef, tracing=tracing)
     env.build(clips_str)

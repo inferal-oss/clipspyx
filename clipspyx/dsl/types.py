@@ -28,11 +28,17 @@ def multi_element_type(annotation):
     return annotation.__element_type__
 
 
+class Fact:
+    """Sentinel type for FACT-ADDRESS slots/multislots."""
+    pass
+
+
 _TYPE_MAP = {
     int: 'INTEGER',
     float: 'FLOAT',
     str: 'STRING',
     Symbol: 'SYMBOL',
+    Fact: 'FACT-ADDRESS',
 }
 
 

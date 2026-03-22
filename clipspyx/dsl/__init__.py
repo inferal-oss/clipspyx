@@ -1,4 +1,4 @@
-from clipspyx.dsl.types import Multi
+from clipspyx.dsl.types import Multi, Fact
 from clipspyx.dsl.template import Template
 from clipspyx.dsl.rule import Rule, _Placeholder
 
@@ -20,4 +20,4 @@ def concurrent(target):
 
 NIL = None
 
-__all__ = ['Template', 'Rule', 'Multi', 'NIL', 'before', 'after', 'concurrent']
+__all__ = ['Template', 'Rule', 'Multi', 'Fact', 'NIL', 'before', 'after', 'concurrent']
