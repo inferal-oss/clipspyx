@@ -28,9 +28,7 @@
 # EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
-__author__ = 'Matteo Cafasso'
-__version__ = '0.1.0'
-__license__ = 'BSD-3'
+__version__ = '0.4.0'
 
 
 __all__ = ('CLIPSError',

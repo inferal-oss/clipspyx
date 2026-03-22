@@ -1,6 +1,6 @@
 [project]
 name = "clipspyx-ffi-64x"
-version = "0.3.0"
+version = "0.4.0"
 description = "CLIPS 6.4x CFFI extension for clipspyx"
 license = "BSD-3-Clause"
 requires-python = ">=3.10"
