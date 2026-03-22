@@ -281,6 +281,42 @@ cancels the pending sleep, and `async_run()` returns.
 This pattern works for any goal type, not just timers. The controlling fact
 acts as an on/off switch for the entire goal chain.
 
+### Programmatic cancellation
+
+**Internal (from rules):** Call `halt_async()` from a rule action to stop the
+loop after the current cycle:
+
+```python
+class StopOnError(Rule):
+    ErrorCount(count=c)
+    c >= 10
+    def __action__(self):
+        self.__env__.halt_async()
+```
+
+**External (from Python):** Pass an `asyncio.Event` as `stop_event`. When set,
+the loop exits cleanly, cancelling all pending handlers:
+
+```python
+stop = asyncio.Event()
+task = asyncio.create_task(env.async_run(stop_event=stop))
+
+# Later, from external code:
+stop.set()
+reason = await task  # "stopped"
+```
+
+### Return values
+
+`async_run()` returns a string indicating why the loop stopped:
+
+| Return value | Meaning |
+|-------------|---------|
+| `"completed"` | No goals remain, no pending handlers |
+| `"max_cycles"` | Reached the `max_cycles` limit |
+| `"halted"` | `halt_async()` was called from a rule |
+| `"stopped"` | `stop_event` was set externally |
+
 ## Error handling
 
 Handler exceptions are wrapped in `GoalHandlerError`:
@@ -309,7 +345,8 @@ disable_goal_handlers(env)  # cancels pending tasks, clears state
 | `enable_goal_handlers(env)` | Register timer-event template and built-in handler |
 | `disable_goal_handlers(env)` | Cancel pending tasks and clear state |
 | `env.register_goal_handler(template, handler)` | Register async handler (template class or string) |
-| `async_run(env, limit, max_cycles)` | Run the async event loop |
+| `async_run(env, limit, max_cycles, stop_event)` | Run the async event loop |
+| `env.halt_async()` | Signal the run loop to stop after the current cycle |
 
 | Class/Constant | Description |
 |----------------|-------------|

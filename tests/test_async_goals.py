@@ -465,5 +465,144 @@ class TestCustomGoalHandler(unittest.TestCase):
         self.assertEqual(int(results[0]['output']), 10)
 
 
+# ---------------------------------------------------------------------------
+# Cancellation tests
+# ---------------------------------------------------------------------------
+
+@unittest.skipUnless(CLIPS_70, "CLIPS 7.0+ required")
+class TestReturnValues(unittest.TestCase):
+    def setUp(self):
+        self.env = Environment()
+        from clipspyx.async_goals import enable_goal_handlers
+        enable_goal_handlers(self.env)
+
+    def test_completed_return_value(self):
+        """async_run returns 'completed' when no goals remain."""
+
+        class OnTimer(Rule):
+            te = TimerEvent(
+                kind=Symbol("after"), name=Symbol("rv-test"), seconds=0.01)
+            asserts(TimerResult(msg=Symbol("rv-done")))
+
+        self.env.define(TimerResult)
+        self.env.define(_make_goal_handler())
+        self.env.define(OnTimer)
+        self.env.reset()
+
+        result = asyncio.run(self.env.async_run())
+        self.assertEqual(result, "completed")
+
+    def test_max_cycles_return_value(self):
+        """async_run returns 'max_cycles' when limit is reached."""
+
+        class OnBeat(Rule):
+            te = TimerEvent(
+                kind=Symbol("every"), name=Symbol("mc-beat"),
+                seconds=0.01)
+
+        self.env.define(_make_goal_handler())
+        self.env.define(OnBeat)
+        self.env.reset()
+
+        result = asyncio.run(self.env.async_run(max_cycles=2))
+        self.assertEqual(result, "max_cycles")
+
+
+@unittest.skipUnless(CLIPS_70, "CLIPS 7.0+ required")
+class TestHaltAsync(unittest.TestCase):
+    def setUp(self):
+        self.env = Environment()
+        from clipspyx.async_goals import enable_goal_handlers
+        enable_goal_handlers(self.env)
+
+    def test_halt_async_stops_loop(self):
+        """halt_async() called from a rule action stops the loop."""
+
+        class BeatCount(Template):
+            n: int
+
+        class OnBeat(Rule):
+            te = TimerEvent(
+                kind=Symbol("every"), name=Symbol("halt-beat"),
+                seconds=0.01, count=c)
+            asserts(BeatCount(n=c))
+
+        class StopAt3(Rule):
+            BeatCount(n=3)
+            def __action__(self):
+                self.__env__.halt_async()
+
+        self.env.define(BeatCount)
+        self.env.define(_make_goal_handler())
+        self.env.define(OnBeat)
+        self.env.define(StopAt3)
+        self.env.reset()
+
+        result = asyncio.run(self.env.async_run())
+        self.assertEqual(result, "halted")
+
+        bcname = BeatCount.__clipspyx_dsl__.name
+        beats = list(self.env.find_template(bcname).facts())
+        # Should have beats 0, 1, 2, 3 (stopped after 3 was processed)
+        self.assertGreaterEqual(len(beats), 3)
+
+    def test_halt_async_without_enable(self):
+        """halt_async() is a no-op if goal handlers not enabled."""
+        env = Environment()
+        env.halt_async()  # should not crash
+
+
+@unittest.skipUnless(CLIPS_70, "CLIPS 7.0+ required")
+class TestStopEvent(unittest.TestCase):
+    def setUp(self):
+        self.env = Environment()
+        from clipspyx.async_goals import enable_goal_handlers
+        enable_goal_handlers(self.env)
+
+    def test_stop_event_stops_loop(self):
+        """Setting stop_event from an external task stops the loop."""
+
+        class OnBeat(Rule):
+            te = TimerEvent(
+                kind=Symbol("every"), name=Symbol("stop-beat"),
+                seconds=0.01)
+
+        self.env.define(_make_goal_handler())
+        self.env.define(OnBeat)
+        self.env.reset()
+
+        async def run_with_stop():
+            stop = asyncio.Event()
+
+            async def set_stop():
+                await asyncio.sleep(0.05)
+                stop.set()
+
+            asyncio.create_task(set_stop())
+            return await self.env.async_run(stop_event=stop)
+
+        result = asyncio.run(run_with_stop())
+        self.assertEqual(result, "stopped")
+
+    def test_stop_event_pre_set(self):
+        """If stop_event is already set, async_run returns immediately."""
+
+        class OnTimer(Rule):
+            te = TimerEvent(
+                kind=Symbol("after"), name=Symbol("pre-stop"), seconds=10.0)
+
+        self.env.define(_make_goal_handler())
+        self.env.define(OnTimer)
+        self.env.reset()
+
+        async def run_pre_stopped():
+            stop = asyncio.Event()
+            stop.set()
+            return await self.env.async_run(stop_event=stop)
+
+        result = asyncio.run(run_pre_stopped())
+        self.assertEqual(result, "stopped")
+
+
 if __name__ == '__main__':
     unittest.main()

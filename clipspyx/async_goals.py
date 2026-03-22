@@ -32,6 +32,7 @@ class GoalHandlerState:
     handlers: dict = field(default_factory=dict)        # template_name -> async callable
     pending: dict = field(default_factory=dict)          # goal_index -> asyncio.Task
     periodic_facts: dict = field(default_factory=dict)   # timer name -> (fact, count)
+    halted: bool = False                                 # set by halt_async()
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +161,12 @@ def register_goal_handler(env, template, handler):
     state.handlers[name] = handler
 
 
-async def async_run(env, limit=None, max_cycles=None):
+async def _wait_event(event):
+    """Helper: await an asyncio.Event (used as a task in asyncio.wait)."""
+    await event.wait()
+
+
+async def async_run(env, limit=None, max_cycles=None, stop_event=None):
     """Run the CLIPS engine with async goal handler processing.
 
     Interleaves synchronous CLIPS execution with async event processing:
@@ -170,20 +176,35 @@ async def async_run(env, limit=None, max_cycles=None):
     4. Wait for at least one handler to complete
     5. Loop back to step 1
 
-    Returns when no goals remain and no handlers are pending,
-    or when max_cycles is reached.
+    Returns a string indicating why the loop stopped:
+    - "completed": no goals remain, no pending handlers
+    - "max_cycles": reached the max_cycles limit
+    - "halted": halt_async() was called (internal cancellation)
+    - "stopped": stop_event was set (external cancellation)
     """
     state = env._goal_handler_state
     if state is None:
         raise RuntimeError("Call enable_goal_handlers(env) first")
 
+    state.halted = False
     cycle = 0
     while max_cycles is None or cycle < max_cycles:
         cycle += 1
+
+        # Check cancellation signals
+        if state.halted:
+            return "halted"
+        if stop_event is not None and stop_event.is_set():
+            return "stopped"
+
         # Run CLIPS synchronously (process agenda).
         # This fires rules that matched facts asserted by handlers
         # in the previous cycle.
         env.run(limit)
+
+        # Check halt after run (rules may have called halt_async)
+        if state.halted:
+            return "halted"
 
         # Auto-retract periodic timer-event facts AFTER run() processes them,
         # so goals regenerate for the next cycle.
@@ -207,11 +228,23 @@ async def async_run(env, limit=None, max_cycles=None):
                 state.pending.pop(idx).cancel()
 
         if not state.pending:
-            break  # no goals, no pending tasks -> done
+            return "completed"
 
-        # Wait for at least one handler to complete
-        done, _ = await asyncio.wait(
-            state.pending.values(), return_when=asyncio.FIRST_COMPLETED)
+        # Wait for at least one handler to complete, or stop_event
+        if stop_event is not None:
+            stop_task = asyncio.create_task(_wait_event(stop_event))
+            pending_set = set(state.pending.values()) | {stop_task}
+            done, _ = await asyncio.wait(
+                pending_set, return_when=asyncio.FIRST_COMPLETED)
+            stop_task.cancel()
+            if stop_event.is_set():
+                for t in state.pending.values():
+                    t.cancel()
+                state.pending.clear()
+                return "stopped"
+        else:
+            done, _ = await asyncio.wait(
+                state.pending.values(), return_when=asyncio.FIRST_COMPLETED)
 
         # Process completed tasks
         for task in done:
@@ -223,3 +256,5 @@ async def async_run(env, limit=None, max_cycles=None):
             if not task.cancelled() and task.exception():
                 raise GoalHandlerError(
                     f"Handler failed: {task.exception()}") from task.exception()
+
+    return "max_cycles"

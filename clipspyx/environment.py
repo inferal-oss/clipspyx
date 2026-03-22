@@ -264,10 +264,16 @@ class Environment:
         from clipspyx.async_goals import register_goal_handler
         register_goal_handler(self, template, handler)
 
-    async def async_run(self, limit=None, max_cycles=None):
+    def halt_async(self):
+        """Signal the async run loop to stop after the current cycle."""
+        state = self._goal_handler_state
+        if state is not None:
+            state.halted = True
+
+    async def async_run(self, limit=None, max_cycles=None, stop_event=None):
         """Run CLIPS with async goal handler processing."""
         from clipspyx.async_goals import async_run
-        return await async_run(self, limit, max_cycles)
+        return await async_run(self, limit, max_cycles, stop_event)
 
     def clear(self):
         """Clear the CLIPS environment.

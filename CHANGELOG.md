@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Async run cancellation: `halt_async()` for internal (rule-driven) cancellation,
+  `stop_event` parameter for external cancellation; `async_run()` now returns a
+  reason string (`"completed"`, `"max_cycles"`, `"halted"`, `"stopped"`)
 - Fact lifecycle events: `env.enable_fact_events()` generates `FactAsserted`,
   `FactRetracted`, and `FactModified` meta-facts for every fact base change;
   retracted facts captured as ppform strings; modify events deferred to next
