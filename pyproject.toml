@@ -1,6 +1,6 @@
 [project]
 name = "clipspyx"
-version = "0.6.1"
+version = "0.7.0"
 description = "CLIPS Python bindings via CFFI"
 readme = "README.md"
 license = "BSD-3-Clause"

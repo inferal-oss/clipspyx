@@ -6,12 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-03-23
+
 ### Added
 - `AsyncRunner` class: resource context for async goal handling; manages full
   lifecycle (enable on init, disable on close); handlers can be async generators
   where bare `yield` encodes persistence and `try/finally` scopes resource
   cleanup to the yield point
-- hypothesis stateful tests with swarm testing for AsyncRunner
 - `**` (power) operator in DSL LHS expressions and effects; compiles to
   CLIPS `**` function (returns FLOAT)
 
