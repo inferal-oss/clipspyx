@@ -7,6 +7,7 @@ facts. Timers are the first built-in handler type.
 """
 
 import asyncio
+import inspect
 import time as _time
 from dataclasses import dataclass, field
 
@@ -31,7 +32,6 @@ class GoalHandlerError(Exception):
 class GoalHandlerState:
     handlers: dict = field(default_factory=dict)        # template_name -> async callable
     pending: dict = field(default_factory=dict)          # goal_index -> asyncio.Task
-    periodic_facts: dict = field(default_factory=dict)   # timer name -> (fact, count)
     halted: bool = False                                 # set by halt_async()
 
 
@@ -53,14 +53,35 @@ TIMER_EVENT_DEFTEMPLATE = """\
 # Built-in timer handler
 # ---------------------------------------------------------------------------
 
-async def _timer_handler(goal, env):
-    """Handle timer-event goals by sleeping and asserting the matching fact."""
+_EXHAUSTED = object()
+"""Sentinel returned by _gen_step when an async generator is exhausted."""
+
+
+async def _gen_step(agen):
+    """Advance an async generator by one step."""
+    try:
+        return await agen.__anext__()
+    except StopAsyncIteration:
+        return _EXHAUSTED
+
+
+def _timer_handler(goal, env):
+    """Dispatch to one-shot or periodic timer handler.
+
+    Returns a coroutine for ``at``/``after`` timers, or an async generator
+    for ``every`` timers.
+    """
+    kind = str(goal['kind'])
+    if kind == 'every':
+        return _timer_every(goal, env)
+    return _timer_oneshot(goal, env)
+
+
+async def _timer_oneshot(goal, env):
+    """Handle at/after timer-event goals (one-shot)."""
     kind = str(goal['kind'])
     name = str(goal['name'])
-    state = env._goal_handler_state
 
-    # Read only the slots relevant to this kind.
-    # Unspecified goal slots return UniversallyQuantifiedValue.
     seconds = 0.0
     target_time = 0.0
 
@@ -73,32 +94,38 @@ async def _timer_handler(goal, env):
 
     await asyncio.sleep(sleep_for)
 
-    # Determine count (increment for periodic)
-    count = 0
-    if kind == 'every' and name in state.periodic_facts:
-        count = state.periodic_facts[name][1] + 1
-
-    # Assert the timer-event fact
     tpl = env.find_template('timer-event')
-    fact = tpl.assert_fact(
+    tpl.assert_fact(
         kind=Symbol(kind), name=Symbol(name),
         seconds=seconds, time=target_time,
-        count=count, fired_at=_time.time())
-
-    # Track periodic facts for auto-retract
-    if kind == 'every':
-        state.periodic_facts[name] = (fact, count)
+        count=0, fired_at=_time.time())
 
 
-# ---------------------------------------------------------------------------
-# Auto-retract helper for periodic timers
-# ---------------------------------------------------------------------------
+async def _timer_every(goal, env):
+    """Handle periodic timer-event goals (async generator).
 
-def _retract_periodic_facts(env, state):
-    """Retract timer-event facts from periodic timers so goals regenerate."""
-    for name, (fact, _count) in list(state.periodic_facts.items()):
-        if fact.exists:
-            fact.retract()
+    Each iteration sleeps, asserts the fact, and yields.  The fact is
+    scoped to the yield via try/finally: it is retracted when the
+    generator resumes (normal) or is cancelled (close/exception).
+    """
+    name = str(goal['name'])
+    seconds = float(goal['seconds'])
+    tpl = env.find_template('timer-event')
+
+    count = 0
+    while True:
+        await asyncio.sleep(seconds)
+        fact = tpl.assert_fact(
+            kind=Symbol('every'), name=Symbol(name),
+            seconds=seconds, time=0.0,
+            count=count, fired_at=_time.time())
+        try:
+            yield
+        finally:
+            if fact.exists:
+                fact.retract()
+        count += 1
+
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +162,6 @@ def disable_goal_handlers(env):
     for task in state.pending.values():
         task.cancel()
     state.pending.clear()
-    state.periodic_facts.clear()
 
     env._goal_handler_state = None
 
@@ -161,25 +187,6 @@ def register_goal_handler(env, template, handler):
     state.handlers[name] = handler
 
 
-async def _wait_event(event):
-    """Helper: await an asyncio.Event (used as a task in asyncio.wait)."""
-    await event.wait()
-
-
-async def async_run(env, limit=None, max_cycles=None, stop_event=None):
-    """Run the CLIPS engine with async goal handler processing.
-
-    .. deprecated::
-        Use :class:`AsyncRunner` instead for better lifecycle management
-        and persistent handler support.
-    """
-    import warnings
-    warnings.warn(
-        "async_run() is deprecated, use AsyncRunner instead",
-        DeprecationWarning, stacklevel=2)
-    runner = AsyncRunner(env)
-    return await runner.run(limit=limit, max_cycles=max_cycles,
-                            stop_event=stop_event)
 
 
 # ---------------------------------------------------------------------------
@@ -209,138 +216,184 @@ class AsyncRunner:
         if state is None:
             enable_goal_handlers(env)
         self.env = env
-        self._persistent_templates = set()   # template names marked persistent
-        self._persistent_tasks = {}          # template_name -> asyncio.Task
+        self._persistent_tasks = {}           # template_name -> asyncio.Task
+        self._generators = {}                 # task_id -> async generator
         self._closed = False
 
-    def register_handler(self, template, handler, persistent=False):
+    def register_handler(self, template, handler):
         """Register an async handler for goals matching a template.
 
-        If ``persistent=True``, the handler task survives across ``run()``
-        calls when ``stop_event`` fires.  Only ``close()`` cancels it.
-        Persistent tasks are keyed per-template (one task per template type).
+        Regular async handlers (coroutines) are tracked per-goal and
+        cancelled when ``stop_event`` fires.  Async generator handlers
+        (functions with ``yield``) are tracked per-template and survive
+        across ``run()`` calls -- ``yield`` encodes persistence.
         """
         register_goal_handler(self.env, template, handler)
-        if persistent:
-            name = template if isinstance(template, str) \
-                else template.__clipspyx_dsl__.name
-            self._persistent_templates.add(name)
 
-    async def run(self, limit=None, max_cycles=None, stop_event=None):
+    # -- run() and its cycle steps --
+
+    async def run(self, limit=None, max_cycles=None):
         """Run the CLIPS engine with async goal handler processing.
+
+        Raises ``RuntimeError`` if called after :meth:`close`.
 
         Returns a string indicating why the loop stopped:
 
         - ``"completed"``: no goals remain, no pending handlers
         - ``"max_cycles"``: reached the *max_cycles* limit
         - ``"halted"``: ``halt_async()`` was called (internal cancellation)
-        - ``"stopped"``: *stop_event* was set (external cancellation)
         """
+        if self._closed:
+            raise RuntimeError("AsyncRunner is closed")
         state = self.env._goal_handler_state
         if state is None:
             raise RuntimeError("Call enable_goal_handlers(env) first")
 
+        return await self._run_loop(state, limit, max_cycles)
+
+    async def _run_loop(self, state, limit, max_cycles):
+        """Core inference loop."""
         state.halted = False
         cycle = 0
         while max_cycles is None or cycle < max_cycles:
             cycle += 1
 
-            # Check cancellation signals
+            self._prune_done_persistent()
+
             if state.halted:
                 return "halted"
-            if stop_event is not None and stop_event.is_set():
-                return "stopped"
 
-            # Run CLIPS synchronously (process agenda).
             self.env.run(limit)
 
-            # Check halt after run (rules may have called halt_async)
             if state.halted:
                 return "halted"
 
-            # Auto-retract periodic timer-event facts AFTER run() processes
-            # them, so goals regenerate for the next cycle.
-            _retract_periodic_facts(self.env, state)
+            self._dispatch_goals(state)
+            self._cancel_retracted_goals(state)
 
-            # Scan goals for new dispatches
-            for goal in self.env.goals():
-                tname = goal.template.name
-                if tname in self._persistent_templates:
-                    # One task per persistent template
-                    if (tname in self._persistent_tasks
-                            and not self._persistent_tasks[tname].done()):
-                        continue
-                    handler = state.handlers.get(tname)
-                    if handler is not None:
-                        self._persistent_tasks[tname] = \
-                            asyncio.create_task(handler(goal, self.env))
-                else:
-                    # Per-goal task (same as legacy async_run)
-                    idx = goal.index
-                    if idx in state.pending:
-                        continue
-                    handler = state.handlers.get(tname)
-                    if handler is not None:
-                        state.pending[idx] = \
-                            asyncio.create_task(handler(goal, self.env))
-
-            # Cancel tasks for retracted goals (non-persistent only)
-            for idx in list(state.pending):
-                try:
-                    self.env.find_goal(idx)
-                except LookupError:
-                    state.pending.pop(idx).cancel()
-
-            # Check completion
-            active_persistent = {
-                n: t for n, t in self._persistent_tasks.items()
-                if not t.done()
-            }
-            if not state.pending and not active_persistent:
+            if not state.pending and not self._has_active_persistent():
                 return "completed"
+            if max_cycles is not None and cycle >= max_cycles:
+                return "max_cycles"
 
-            # Build wait set from both non-persistent and persistent tasks
-            wait_set = set(state.pending.values()) | set(
-                t for t in self._persistent_tasks.values() if not t.done()
-            )
-            if not wait_set:
-                return "completed"
-
-            # Wait for at least one handler to complete, or stop_event
-            if stop_event is not None:
-                stop_task = asyncio.create_task(_wait_event(stop_event))
-                wait_set.add(stop_task)
-                done, _ = await asyncio.wait(
-                    wait_set, return_when=asyncio.FIRST_COMPLETED)
-                stop_task.cancel()
-                if stop_event.is_set():
-                    # Cancel ONLY non-persistent tasks
-                    for t in state.pending.values():
-                        t.cancel()
-                    state.pending.clear()
-                    return "stopped"
-            else:
-                done, _ = await asyncio.wait(
-                    wait_set, return_when=asyncio.FIRST_COMPLETED)
-
-            # Process completed tasks
-            for task in done:
-                # Remove from non-persistent pending
-                for idx, t in list(state.pending.items()):
-                    if t is task:
-                        del state.pending[idx]
-                        break
-                # Remove from persistent tasks
-                for name, t in list(self._persistent_tasks.items()):
-                    if t is task:
-                        del self._persistent_tasks[name]
-                        break
-                if not task.cancelled() and task.exception():
-                    raise GoalHandlerError(
-                        f"Handler failed: {task.exception()}"
-                    ) from task.exception()
+            reason = await self._wait_for_handlers(state)
+            if reason is not None:
+                return reason
 
         return "max_cycles"
+
+    def _prune_done_persistent(self):
+        """Remove completed persistent tasks from tracking."""
+        for name in [n for n, t in self._persistent_tasks.items()
+                     if t.done()]:
+            del self._persistent_tasks[name]
+
+    def _has_active_persistent(self):
+        """True if any persistent task is still running."""
+        return any(not t.done() for t in self._persistent_tasks.values())
+
+    def _create_handler_task(self, handler, goal):
+        """Create a task from a handler invocation.
+
+        Returns ``(task, is_generator)``.  If the handler returns a
+        coroutine, wraps it in a task directly.  If it returns an async
+        generator, creates a task for the first ``anext()`` step.
+        """
+        invocation = handler(goal, self.env)
+        if inspect.isasyncgen(invocation):
+            task = asyncio.create_task(_gen_step(invocation))
+            self._generators[id(task)] = invocation
+            return task, True
+        return asyncio.create_task(invocation), False
+
+    def _dispatch_goals(self, state):
+        """Scan CLIPS goals and create handler tasks for new ones.
+
+        Generators (yield) are tracked per-template in _persistent_tasks.
+        Coroutines are tracked per-goal in state.pending.
+        """
+        for goal in self.env.goals():
+            tname = goal.template.name
+            # Already have a running persistent task for this template?
+            if tname in self._persistent_tasks \
+                    and not self._persistent_tasks[tname].done():
+                continue
+            handler = state.handlers.get(tname)
+            if handler is None:
+                continue
+            task, is_gen = self._create_handler_task(handler, goal)
+            if is_gen:
+                self._persistent_tasks[tname] = task
+            else:
+                idx = goal.index
+                if idx in state.pending:
+                    continue
+                state.pending[idx] = task
+
+    def _cancel_retracted_goals(self, state):
+        """Cancel non-persistent tasks whose goals no longer exist."""
+        for idx in list(state.pending):
+            try:
+                self.env.find_goal(idx)
+            except LookupError:
+                task = state.pending.pop(idx)
+                task.cancel()
+                gen = self._generators.pop(id(task), None)
+                if gen is not None:
+                    asyncio.create_task(gen.aclose())
+
+    async def _wait_for_handlers(self, state):
+        """Wait for at least one handler to complete.
+
+        Returns ``"completed"`` if no tasks remain, or ``None`` to
+        continue cycling.
+        """
+        wait_set = set(state.pending.values()) | {
+            t for t in self._persistent_tasks.values() if not t.done()
+        }
+        if not wait_set:
+            return "completed"
+
+        done, _ = await asyncio.wait(
+            wait_set, return_when=asyncio.FIRST_COMPLETED)
+        self._process_done(state, done)
+        return None
+
+    def _process_done(self, state, done):
+        """Remove completed tasks from tracking and propagate errors.
+
+        For generator-backed tasks, creates a replacement task for the
+        next iteration instead of removing.
+        """
+        # Build reverse lookup: task id -> (owning dict, key)
+        owners = {}
+        for idx, t in state.pending.items():
+            owners[id(t)] = (state.pending, idx)
+        for name, t in self._persistent_tasks.items():
+            owners[id(t)] = (self._persistent_tasks, name)
+
+        for task in done:
+            owner = owners.get(id(task))
+            gen = self._generators.pop(id(task), None)
+
+            if task.cancelled():
+                if owner: del owner[0][owner[1]]
+                if gen: asyncio.create_task(gen.aclose())
+                continue
+
+            if task.exception():
+                if owner: del owner[0][owner[1]]
+                if gen: asyncio.create_task(gen.aclose())
+                raise GoalHandlerError(
+                    f"Handler failed: {task.exception()}"
+                ) from task.exception()
+
+            if gen and task.result() is not _EXHAUSTED:
+                new_task = asyncio.create_task(_gen_step(gen))
+                self._generators[id(new_task)] = gen
+                if owner: owner[0][owner[1]] = new_task
+            else:
+                if owner: del owner[0][owner[1]]
 
     async def close(self):
         """Cancel all tasks (persistent and non-persistent) and disable
@@ -356,6 +409,8 @@ class AsyncRunner:
             for task in state.pending.values():
                 task.cancel()
             state.pending.clear()
+        # Generator cleanup happens via task cancellation above
+        self._generators.clear()
         disable_goal_handlers(self.env)
         self._closed = True
 

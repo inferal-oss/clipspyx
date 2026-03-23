@@ -2,8 +2,10 @@
 
 An asyncio-based framework for fulfilling CLIPS 7.0x backward chaining goals
 from Python. Rules declare what they need, the runtime fulfills those needs
-asynchronously. Timers are the first built-in handler; the framework is general
-enough for any async operation.
+asynchronously. Handlers can be simple one-shot coroutines or async generators
+that persist across run cycles using try/finally for resource cleanup. Timers
+are the first built-in handler; the framework is general enough for any async
+operation.
 
 **Requires CLIPS 7.0x.** Goals are a 7.0x backward chaining feature.
 
@@ -99,8 +101,7 @@ finally:
 
 ### Registering handlers
 
-Register async handlers for any template. This replaces calling
-`env.register_goal_handler` directly:
+Register async handlers for any template:
 
 ```python
 async with AsyncRunner(env) as runner:
@@ -111,12 +112,18 @@ async with AsyncRunner(env) as runner:
 The built-in timer handler is registered automatically when goal handlers are
 enabled.
 
-### Persistent handlers
+### Persistent vs. one-shot handlers
 
-By default, a handler's task is cancelled when the run loop exits (due to a
-stop event, max cycles, or halt). A persistent handler survives stop events and
-stays alive across multiple `run()` calls. Use this for long-lived background
-operations that should keep running while the main loop restarts.
+Persistence is determined by the handler type: async generators are persistent,
+coroutines are one-shot. There is no flag to set.
+
+A **coroutine handler** runs once and completes. Its task is cancelled when the
+run loop exits (due to max cycles or halt).
+
+An **async generator handler** (any handler with `yield`) is automatically
+persistent. It maintains state across multiple `run()` calls. Each `yield`
+suspends the generator, letting the runner call `env.run()`, then the generator
+resumes for the next iteration.
 
 ```python
 async def monitor_handler(goal, env):
@@ -126,22 +133,15 @@ async def monitor_handler(goal, env):
         async with httpx.AsyncClient() as client:
             resp = await client.get(url)
         MonitorResult(__env__=env, url=url, status=resp.status_code)
+        yield  # suspend, let the runner process facts, then resume
         await asyncio.sleep(30)
 
 async with AsyncRunner(env) as runner:
-    runner.register_handler(MonitorRequest, monitor_handler, persistent=True)
-
-    work_ready = asyncio.Event()
-    done = False
-    while not done:
-        work_ready.clear()
-        result = await runner.run(stop_event=work_ready)
-        # Persistent handler tasks survive the stop_event.
-        # Process results, then loop to run() again.
-        done = check_if_finished(env)
+    runner.register_handler(MonitorRequest, monitor_handler)
+    result = await runner.run()  # runs until completed or halted
 ```
 
-Persistent tasks are only cancelled when the runner is closed (either by
+Generator tasks are only cancelled when the runner is closed (either by
 exiting the `async with` block or calling `runner.close()` explicitly).
 
 ### Running the loop
@@ -150,25 +150,25 @@ exiting the `async with` block or calling `runner.close()` explicitly).
 await runner.run()                  # run until no goals and no pending handlers
 await runner.run(limit=10)          # pass limit to each env.run() call
 await runner.run(max_cycles=5)      # stop after N dispatch cycles
-await runner.run(stop_event=evt)    # stop when the event is set
 ```
 
 Each cycle:
 
 1. `env.run()` processes the CLIPS agenda (fires rules)
-2. Auto-retract periodic timer facts (so goals regenerate)
+2. Resume suspended generators (try/finally cleanup runs here)
 3. Scan goals for registered handlers
 4. Dispatch matching goals as asyncio tasks
 5. Wait for at least one task to complete
 6. Loop
 
 Returns when no goals remain and no handlers are pending, when `max_cycles`
-is reached, when `halt_async()` is called, or when `stop_event` is set.
+is reached, or when `halt_async()` is called.
 
 ## TimerEvent template
 
 The `TimerEvent` DSL template is defined in `clipspyx.dsl.timer` and
-auto-registered by `enable_goal_handlers`. Import it for use in rules:
+auto-registered when `AsyncRunner` enables goal handlers. Import it for use
+in rules:
 
 ```python
 from clipspyx.dsl import TimerEvent
@@ -213,8 +213,8 @@ ScheduleConfig(__env__=env, target_time=tomorrow_9am.timestamp())
 ```
 
 **every**: fire periodically. The `count` slot increments each cycle. The
-framework auto-retracts the timer-event fact after each `run()` cycle so the
-goal regenerates.
+handler uses try/finally to retract the timer-event fact after each `run()`
+cycle so the goal regenerates.
 
 ```python
 class BeatLog(Template):
@@ -306,10 +306,12 @@ runner.register_handler(FetchRequest, fetch_handler)
 runner.register_handler('fetch-request', fetch_handler)
 ```
 
-Handler signature:
+### Handler signature
+
+A handler is an async callable that receives a goal fact and the environment:
 
 ```python
-async def handler(goal, env) -> None
+async def handler(goal, env)
 ```
 
 - `goal`: a `TemplateFact` with slot access via `goal['slot_name']`
@@ -317,6 +319,75 @@ async def handler(goal, env) -> None
 
 The handler must assert a fact matching the goal's template to satisfy it.
 Multiple handlers dispatch concurrently via `asyncio.gather`.
+
+Coroutine handlers simply return when done (the return value is ignored).
+Generator handlers yield bare `yield` to suspend; see the next section.
+
+### Async generator handlers
+
+A handler can be an async generator instead of a regular coroutine. Any
+function with `yield` becomes a generator. The presence of `yield` tells
+the runner this handler is long-lived: it is auto-promoted to persistent
+tracking (per-template, survives goal retraction, maintains state between
+yields).
+
+The simplest form uses bare `yield` as a suspension point:
+
+```python
+async def websocket_handler(goal, env):
+    url = str(goal['url'])
+    async with websockets.connect(url) as ws:
+        async for message in ws:
+            IngressMessage(__env__=env, data=Symbol(message))
+            yield  # suspend, let the runner process facts, then resume
+```
+
+The generator stays alive across `run()` cycles. Each `yield` gives the
+runner a chance to call `env.run()` (processing the asserted fact), then
+resumes the generator for the next iteration. Yield IS persistence:
+generators are persistent, coroutines are not.
+
+### The try/finally cleanup pattern
+
+When a generator creates a resource that must be cleaned up between cycles,
+wrap the `yield` in `try/finally`. The `finally` block runs when the
+generator resumes (normal path) or when the generator is cancelled
+(close/exception path). This gives guaranteed cleanup in all cases.
+
+```python
+async def _timer_every(goal, env):
+    name = str(goal['name'])
+    seconds = float(goal['seconds'])
+    tpl = env.find_template('timer-event')
+    count = 0
+    while True:
+        await asyncio.sleep(seconds)
+        fact = tpl.assert_fact(
+            kind=Symbol('every'), name=Symbol(name),
+            seconds=seconds, time=0.0,
+            count=count, fired_at=_time.time())
+        try:
+            yield
+        finally:
+            if fact.exists:
+                fact.retract()
+        count += 1
+```
+
+The try/finally scopes the fact to the yield: it is retracted when the
+generator resumes (normal) or is cancelled (close/exception). The generator
+owns its full lifecycle; the runner is not involved in cleanup.
+
+Here is how the pieces fit together:
+
+1. `yield` suspends the generator, letting the runner call `env.run()`
+2. `try/finally` scopes resources to the yield: cleanup happens on resume
+   OR on cancellation
+3. This is Python's standard generator cleanup guarantee
+4. The generator owns its full lifecycle: no runner involvement in cleanup
+
+The generator's local state (like `count` above) persists across iterations
+without any external bookkeeping.
 
 ## Cancellation
 
@@ -367,18 +438,26 @@ class StopOnError(Rule):
         self.__env__.halt_async()
 ```
 
-**External (from Python):** Pass an `asyncio.Event` as `stop_event`. When set,
-the loop exits cleanly, cancelling all non-persistent pending handlers:
+**External (from Python):** Call `runner.close()` from another task to shut down
+the runner, cancelling all pending handlers:
 
 ```python
-stop = asyncio.Event()
-
 async with AsyncRunner(env) as runner:
-    task = asyncio.create_task(runner.run(stop_event=stop))
+    task = asyncio.create_task(runner.run())
 
     # Later, from external code:
-    stop.set()
-    reason = await task  # "stopped"
+    await runner.close()
+    reason = await task
+```
+
+For timeouts, use `asyncio.wait_for`:
+
+```python
+async with AsyncRunner(env) as runner:
+    try:
+        result = await asyncio.wait_for(runner.run(), timeout=60.0)
+    except asyncio.TimeoutError:
+        print("Run timed out")
 ```
 
 ### Return values
@@ -390,7 +469,6 @@ async with AsyncRunner(env) as runner:
 | `"completed"` | No goals remain, no pending handlers |
 | `"max_cycles"` | Reached the `max_cycles` limit |
 | `"halted"` | `halt_async()` was called from a rule |
-| `"stopped"` | `stop_event` was set externally |
 
 ## Error handling
 
@@ -406,51 +484,15 @@ except GoalHandlerError as e:
     print(f"Handler failed: {e.__cause__}")
 ```
 
-## Legacy API (deprecated)
-
-The `enable_goal_handlers` + `async_run` pattern still works but is deprecated.
-Prefer `AsyncRunner`, which handles setup, teardown, and persistent handlers
-automatically.
-
-> **Deprecation notice:** `enable_goal_handlers`, `disable_goal_handlers`, and
-> `env.async_run()` will be removed in a future release. Migrate to
-> `AsyncRunner` for new code.
-
-```python
-from clipspyx.async_goals import enable_goal_handlers, disable_goal_handlers
-
-env = Environment()
-enable_goal_handlers(env)  # registers timer-event template + built-in handler
-
-# Register handlers directly on the environment
-env.register_goal_handler(FetchRequest, fetch_handler)
-
-# Run the loop
-await env.async_run()
-await env.async_run(limit=10)
-await env.async_run(max_cycles=5)
-await env.async_run(stop_event=stop)
-
-# Disable when done
-disable_goal_handlers(env)  # cancels pending tasks, clears state
-```
-
 ## API reference
 
 | Class | Description |
 |-------|-------------|
 | `AsyncRunner(env)` | Async context manager for running goal handlers. Auto-enables goal handlers if not already enabled. |
-| `AsyncRunner.register_handler(template, handler, persistent=False)` | Register an async handler. Set `persistent=True` for tasks that survive stop events. |
-| `AsyncRunner.run(limit, max_cycles, stop_event)` | Run the async event loop. Returns `"completed"`, `"max_cycles"`, `"halted"`, or `"stopped"`. |
+| `AsyncRunner.register_handler(template, handler)` | Register an async handler. The handler can be a coroutine function (one-shot) or an async generator function (persistent). Generators are automatically persistent: they maintain state across `run()` cycles. Coroutine handlers are one-shot and cancelled on loop exit. |
+| `AsyncRunner.run(limit, max_cycles)` | Run the async event loop. Returns `"completed"`, `"max_cycles"`, or `"halted"`. |
 | `AsyncRunner.close()` | Cancel all tasks and disable goal handlers. Called automatically on context manager exit. |
-
-| Function (legacy) | Description |
-|--------------------|-------------|
-| `enable_goal_handlers(env)` | Register timer-event template and built-in handler |
-| `disable_goal_handlers(env)` | Cancel pending tasks and clear state |
-| `env.register_goal_handler(template, handler)` | Register async handler (template class or string) |
-| `env.async_run(limit, max_cycles, stop_event)` | Run the async event loop |
-| `env.halt_async()` | Signal the run loop to stop after the current cycle |
+| `env.halt_async()` | Signal the run loop to stop after the current cycle. |
 
 | Class/Constant | Description |
 |----------------|-------------|

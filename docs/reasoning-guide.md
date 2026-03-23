@@ -9,7 +9,7 @@ reference docs.
 
 **Version compatibility.** Most of this guide applies to both CLIPS 6.4x and
 7.0x backends. Sections marked **(7.0x)** require `uv sync --extra 70x`.
-Features unique to 7.0x: `goal()`, `explicit()`, `async_run()`, `TimerEvent`,
+Features unique to 7.0x: `goal()`, `explicit()`, `AsyncRunner`, `TimerEvent`,
 and custom goal handlers. Everything else works on both backends.
 
 ### How to read this guide
@@ -704,7 +704,7 @@ class EscalateStaleTicket(Rule):
   with `status=Symbol("open")`. If the ticket's status changes before the
   timer fires, the activation is removed.
 - Multiple tickets create multiple independent timers automatically.
-- Use `await env.async_run()` instead of `env.run()` to enter the async loop.
+- Use `AsyncRunner` instead of `env.run()` to enter the async loop (see [Async Workflows](#async-workflows-using-asyncio-with-the-inference-engine-70x)).
 
 ---
 
@@ -1565,7 +1565,7 @@ or retract and re-assert it. Modify resets refraction for that fact.
 
 ## Async Workflows: Using asyncio with the Inference Engine (7.0x)
 
-CLIPS 7.0x adds backward chaining (goals), and clipspyx's `async_run()` bridges
+CLIPS 7.0x adds backward chaining (goals), and clipspyx's `AsyncRunner` bridges
 goals to Python's asyncio. This lets rules **wait** for external events: timers,
 HTTP responses, database queries, or any async operation.
 
@@ -1616,15 +1616,18 @@ If the ticket's status changes to `"closed"` before the timer fires, the rule's
 conditions no longer match. CLIPS retracts the goal. The async runtime cancels
 the pending timer. No wasted work.
 
-### Running the async loop
+### Running the async loop with AsyncRunner
+
+`AsyncRunner` is the resource context for async goal handling. It auto-enables
+goal handlers on creation and disables them on `close()`. Use it as an async
+context manager to ensure proper cleanup.
 
 ```python
 import asyncio
 from clipspyx import Environment
-from clipspyx.async_goals import enable_goal_handlers
+from clipspyx.async_goals import AsyncRunner
 
 env = Environment()
-enable_goal_handlers(env)
 
 # Define templates and rules...
 env.define(Ticket)
@@ -1637,9 +1640,16 @@ env.reset()
 Ticket(__env__=env, id=Symbol("T-1"), status=Symbol("open"))
 
 # Run until all goals are satisfied and agenda is empty
-result = asyncio.run(env.async_run())
-# result is one of: "completed", "max_cycles", "halted", "stopped"
+async def main():
+    async with AsyncRunner(env) as runner:
+        result = await runner.run()
+    # result is one of: "completed", "max_cycles", "halted", "stopped"
+
+asyncio.run(main())
 ```
+
+The `async with` block handles the full lifecycle: enabling goal handlers,
+running the inference loop, and cleaning up all tasks on exit.
 
 ### Waiting for specific rules to fire
 
@@ -1652,15 +1662,16 @@ then inspect the result from Python.
 async def main():
     # ... setup env, define templates/rules, assert initial facts ...
 
-    result = await env.async_run()
+    async with AsyncRunner(env) as runner:
+        result = await runner.run()
 
-    # After async_run returns, query the fact list
-    escalated = list(env.find_template("Escalated").facts())
-    for e in escalated:
-        print(f"Escalated ticket: {e['ticket_id']}")
+        # After run returns, query the fact list
+        escalated = list(env.find_template("Escalated").facts())
+        for e in escalated:
+            print(f"Escalated ticket: {e['ticket_id']}")
 ```
 
-This is the simplest approach. `async_run()` runs until no goals remain and
+This is the simplest approach. `runner.run()` runs until no goals remain and
 the agenda is empty, then you read the results.
 
 **Pattern 2: Use `max_cycles` for incremental processing.**
@@ -1669,18 +1680,19 @@ the agenda is empty, then you read the results.
 async def main():
     # ... setup ...
 
-    while True:
-        result = await env.async_run(max_cycles=1)
+    async with AsyncRunner(env) as runner:
+        while True:
+            result = await runner.run(max_cycles=1)
 
-        # Check for a specific fact after each cycle
-        results = list(env.find_template("Escalated").facts())
-        if results:
-            print(f"Found escalation: {results[0]['ticket_id']}")
-            break
+            # Check for a specific fact after each cycle
+            results = list(env.find_template("Escalated").facts())
+            if results:
+                print(f"Found escalation: {results[0]['ticket_id']}")
+                break
 
-        if result == "completed":
-            print("No escalations needed")
-            break
+            if result == "completed":
+                print("No escalations needed")
+                break
 ```
 
 Each cycle fires one round of goals + rules. You can inspect state between
@@ -1695,36 +1707,52 @@ class NotifyAndStop(Rule):
         print(f"Escalated {self.tid}, stopping async loop")
         self.__env__.halt_async()
 
-# async_run() returns "halted" when halt_async() is called
-result = asyncio.run(env.async_run())
-assert result == "halted"
+async def main():
+    async with AsyncRunner(env) as runner:
+        # runner.run() returns "halted" when halt_async() is called
+        result = await runner.run()
+        assert result == "halted"
+
+asyncio.run(main())
 ```
 
 The rule itself decides when to stop the loop. Useful when a terminal condition
 is naturally expressed as a rule (e.g., "stop when any critical alert exists").
 
-**Pattern 4: External cancellation with `stop_event`.**
+**Pattern 4: External shutdown with `runner.close()`.**
 
 ```python
 async def main():
-    stop = asyncio.Event()
+    async with AsyncRunner(env) as runner:
+        # External shutdown after a delay
+        async def shutdown_after_delay():
+            await asyncio.sleep(60)
+            await runner.close()
 
-    # Run async loop in a task
-    loop_task = asyncio.create_task(env.async_run(stop_event=stop))
-
-    # Separately, wait for some external condition
-    await external_signal()
-    stop.set()  # cancel the loop
-
-    result = await loop_task  # "stopped"
+        asyncio.create_task(shutdown_after_delay())
+        result = await runner.run()
 ```
 
-This lets Python code outside the rule system control when the loop ends.
-Useful for integrating with web servers, CLI tools, or other async frameworks.
+You can also use `asyncio.wait_for(runner.run(), timeout=...)` for simple
+timeouts. This lets Python code outside the rule system control when the loop
+ends. Useful for integrating with web servers, CLI tools, or other async
+frameworks.
 
-### Custom goal handlers: async I/O from rules
+### Custom goal handlers: coroutines vs. generators
 
-Rules can trigger arbitrary async operations via custom goal handlers:
+Handlers registered via `runner.register_handler()` come in two flavors:
+
+**Coroutine handlers** (regular async functions) are one-shot and per-goal.
+They run once, assert a fact, and complete. They finish when the goal they
+serve is fulfilled.
+
+**Generator handlers** (async functions with `yield`) are persistent and
+per-template. They survive across `runner.run()` calls and handle their own
+cleanup via try/finally. The bare `yield` is what encodes persistence: each
+`yield` suspends the generator, lets the runner call `env.run()` to process
+whatever facts were asserted, then resumes the generator for the next iteration.
+
+Here is a coroutine handler for one-shot HTTP fetches:
 
 ```python
 class FetchRequest(Template):
@@ -1744,7 +1772,10 @@ async def fetch_handler(goal, env):
     FetchRequest(__env__=env, url=url)
     FetchResponse(__env__=env, url=url, status=resp.status_code)
 
-env.register_goal_handler(FetchRequest, fetch_handler)
+async def main():
+    async with AsyncRunner(env) as runner:
+        runner.register_handler(FetchRequest, fetch_handler)
+        result = await runner.run()
 ```
 
 Now any rule can request an HTTP fetch by including `FetchRequest(url=...)` in
@@ -1763,6 +1794,66 @@ class CheckHealthEndpoint(Rule):
 This rule reads as: "when a service has a health URL and fetching it returns
 non-200, mark the service as down." The fetch happens automatically via the
 goal mechanism. No imperative orchestration.
+
+### The try/finally generator pattern
+
+Generator handlers are the right tool for long-lived or repeating async work.
+The key insight: `yield` suspends the generator, and try/finally scopes
+resources to the yield point. When the generator resumes (normal path) or is
+cancelled (`close()` path), the finally block runs, providing guaranteed
+cleanup in all cases.
+
+Here is a generator handler that streams data and cleans up on each iteration:
+
+```python
+class StreamEvent(Template):
+    data: Symbol
+
+class HandleStreamGoal(Rule):
+    goal(StreamEvent(data=d))
+
+async def stream_handler(goal, env):
+    # Assert the initial fact to satisfy the goal
+    StreamEvent(__env__=env, data=Symbol("stream-data"))
+    # Then loop, yielding after each batch of work
+    for i in range(10):
+        await asyncio.sleep(0.02)
+        collected.append(f"item-{i}")
+        yield  # suspend: runner calls env.run(), then resumes us
+```
+
+The bare `yield` is what makes this persistent. Without it, the handler would
+be a regular coroutine: one-shot, completing once the goal is fulfilled.
+
+For resources that need cleanup between iterations, wrap the yield in
+try/finally:
+
+```python
+async def polling_handler(goal, env):
+    SensorReading(__env__=env, value=0)  # satisfy the goal
+    count = 0
+    while True:
+        try:
+            reading = await sensor.read()
+            fact = SensorReading(__env__=env, value=reading)
+            yield  # suspend: runner processes the fact via env.run()
+        finally:
+            # Runs on resume (normal) OR on close/cancellation
+            if fact.exists:
+                fact.retract()
+        count += 1
+```
+
+The lifecycle:
+
+1. `yield` suspends the generator. The runner calls `env.run()`.
+2. On resume, the `finally` block runs first, retracting the old fact.
+3. The next loop iteration reads a new sensor value and asserts a new fact.
+4. On `close()` (runner shutdown), the `finally` block also runs, ensuring cleanup.
+
+This is Python's standard generator cleanup guarantee applied to async goal
+handlers. The generator owns its full lifecycle; the runner is not involved
+in cleanup.
 
 ### Periodic work with `EVERY` timers
 
@@ -1803,6 +1894,7 @@ The `EVERY` timer fires repeatedly. The `count` slot increments each time.
 | `asyncio.gather(t1, t2)` | Multiple independent goals dispatch concurrently |
 | `while True: poll()` | `TimerEvent(kind=Symbol("every"), ...)` |
 | `try/except` | `GoalHandlerError` wraps handler exceptions |
+| Resource cleanup in `finally` | Generator handler with try/finally around `yield` |
 
 The fundamental shift: in imperative async, you orchestrate the sequence of
 operations. In goal-driven rules, you declare what facts are needed and the
@@ -1811,8 +1903,8 @@ runtime figures out how and when to produce them.
 ### Async servers inside the rule loop
 
 The examples above show CLIPS reaching out (timers, HTTP fetches). The
-pattern works in reverse: external systems push facts **into** `async_run()`,
-turning the rule engine into the application's main event loop.
+pattern works in reverse: external systems push facts **into** the `AsyncRunner`
+loop, turning the rule engine into the application's main event loop.
 
 The mechanism: an `asyncio.Queue` bridges an HTTP server to a goal handler.
 The server puts request dicts on the queue. The goal handler awaits them and
@@ -1828,12 +1920,13 @@ response_futures: dict[str, asyncio.Future] = {}
 class HandleHttpGoal(Rule):
     goal(HttpRequest(id=rid, method=m, path=p, body=b, token=t))
 
-# Goal handler: blocks until a request arrives, then asserts it
+# Goal handler (generator): blocks until a request arrives, then asserts it.
+# The bare yield makes this persistent: it loops waiting for requests.
 async def http_goal_handler(goal, env):
-    data = await request_queue.get()
-    HttpRequest(__env__=env, **data)
-
-env.register_goal_handler(HttpRequest, http_goal_handler)
+    while True:
+        data = await request_queue.get()
+        HttpRequest(__env__=env, **data)
+        yield  # suspend: runner processes the request via env.run()
 
 # Terminal rule: deliver response, retract request (triggers next goal)
 class SendResponse(Rule):
@@ -1844,12 +1937,12 @@ class SendResponse(Rule):
         future = response_futures.pop(str(self.rid), None)
         if future and not future.done():
             future.set_result({"status": int(self.code), "body": str(self.body)})
-        self.req.retract()  # no HttpRequest → goal fires → handler awaits next
+        self.req.retract()  # no HttpRequest -> goal fires -> handler awaits next
 ```
 
-The loop emerges from the rules: retract request → goal fires → handler
-blocks on queue → next request arrives → assert → rules fire → repeat. No
-`while True`, no explicit iteration.
+The loop emerges from the rules: retract request -> goal fires -> handler
+blocks on queue -> next request arrives -> assert -> rules fire -> repeat. No
+`while True` in the application code, no explicit iteration.
 
 The HTTP server is a thin producer that knows nothing about rules:
 
@@ -1868,7 +1961,9 @@ Start the server, then hand control to the engine:
 ```python
 async def main():
     await start_http_server(port=8080)
-    await env.async_run()  # the rule engine IS the main loop
+    async with AsyncRunner(env) as runner:
+        runner.register_handler(HttpRequest, http_goal_handler)
+        await runner.run()  # the rule engine IS the main loop
 ```
 
 **Why this matters.** HTTP requests, timers, database events, and message queue
@@ -1898,5 +1993,5 @@ one goal handler and one goal rule -- no changes to existing processing rules.
 | `env.run()` | Run inference engine | `while work_to_do: process()` |
 | `env.enable_tracing()` | Record rule provenance | Logging / audit trail |
 | `env.enable_fact_events()` | React to fact lifecycle | Observer pattern callbacks |
-| `env.async_run()` | Async main loop (7.0x) | `asyncio.run(server.serve_forever())` |
+| `AsyncRunner(env)` | Async resource context (7.0x) | `asyncio.run(server.serve_forever())` |
 | `env.visualize()` | Architecture diagram | Manual documentation |

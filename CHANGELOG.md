@@ -7,12 +7,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- `AsyncRunner` class: resource context for async goal handling with persistent
-  handler support; manages full lifecycle (enable/disable) and survives handlers
-  across `run()` invocations via `persistent=True`
+- `AsyncRunner` class: resource context for async goal handling; manages full
+  lifecycle (enable on init, disable on close); handlers can be async generators
+  where bare `yield` encodes persistence and `try/finally` scopes resource
+  cleanup to the yield point
+- hypothesis stateful tests with swarm testing for AsyncRunner
 
-### Deprecated
-- `async_run()` function and `env.async_run()` method: use `AsyncRunner` instead
+### Removed
+- `async_run()` function, `env.async_run()` method, `stop_event` parameter,
+  `persistent` flag on `register_handler`: replaced by `AsyncRunner` with
+  generator-based persistence
 
 ## [0.6.1] - 2026-03-22
 

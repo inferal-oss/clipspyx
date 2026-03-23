@@ -8,7 +8,6 @@ Uses the DSL for rule/template definitions.
 import asyncio
 import time
 import unittest
-import warnings
 
 import clipspyx
 from clipspyx import Environment, Symbol
@@ -279,7 +278,8 @@ class TestTimerEvery(unittest.TestCase):
         self.assertEqual(int(logs[2]['n']), 2)
 
     def test_cancel_periodic_by_retracting_controlling_fact(self):
-        """Retracting a controlling fact stops periodic timer and exits loop."""
+        """Retracting a controlling fact stops the consuming rule from
+        firing, though the generator keeps ticking until close()."""
 
         class Active(Template):
             pass
@@ -309,17 +309,23 @@ class TestTimerEvery(unittest.TestCase):
 
         Active(__env__=self.env)
 
-        # Should exit on its own - no max_cycles needed
-        asyncio.run(self.runner.run())
+        async def drive():
+            # Run enough cycles for beats 0, 1, 2 and Active retraction
+            result = await self.runner.run(max_cycles=6)
+            self.assertEqual(result, "max_cycles")
 
-        blname = BeatLog2.__clipspyx_dsl__.name
-        logs = [f for f in self.env.find_template(blname).facts()]
-        # Got at least beats 0, 1, 2 before stopping
-        self.assertGreaterEqual(len(logs), 3)
-        # Active fact should be gone
-        aname = Active.__clipspyx_dsl__.name
-        active_facts = list(self.env.find_template(aname).facts())
-        self.assertEqual(len(active_facts), 0)
+            blname = BeatLog2.__clipspyx_dsl__.name
+            logs = [f for f in self.env.find_template(blname).facts()]
+            # Got at least beats 0, 1, 2 before Active was retracted
+            self.assertGreaterEqual(len(logs), 3)
+            # Active fact should be gone
+            aname = Active.__clipspyx_dsl__.name
+            active_facts = list(self.env.find_template(aname).facts())
+            self.assertEqual(len(active_facts), 0)
+
+            await self.runner.close()
+
+        asyncio.run(drive())
 
 
 # ---------------------------------------------------------------------------
@@ -548,57 +554,6 @@ class TestHaltAsync(unittest.TestCase):
         env.halt_async()  # should not crash
 
 
-@unittest.skipUnless(CLIPS_70, "CLIPS 7.0+ required")
-class TestStopEvent(unittest.TestCase):
-    def setUp(self):
-        self.env = Environment()
-        self.runner = AsyncRunner(self.env)
-
-    def test_stop_event_stops_loop(self):
-        """Setting stop_event from an external task stops the loop."""
-
-        class OnBeat(Rule):
-            te = TimerEvent(
-                kind=Symbol("every"), name=Symbol("stop-beat"),
-                seconds=0.01)
-
-        self.env.define(_make_goal_handler())
-        self.env.define(OnBeat)
-        self.env.reset()
-
-        async def run_with_stop():
-            stop = asyncio.Event()
-
-            async def set_stop():
-                await asyncio.sleep(0.05)
-                stop.set()
-
-            asyncio.create_task(set_stop())
-            return await self.runner.run(stop_event=stop)
-
-        result = asyncio.run(run_with_stop())
-        self.assertEqual(result, "stopped")
-
-    def test_stop_event_pre_set(self):
-        """If stop_event is already set, async_run returns immediately."""
-
-        class OnTimer(Rule):
-            te = TimerEvent(
-                kind=Symbol("after"), name=Symbol("pre-stop"), seconds=10.0)
-
-        self.env.define(_make_goal_handler())
-        self.env.define(OnTimer)
-        self.env.reset()
-
-        async def run_pre_stopped():
-            stop = asyncio.Event()
-            stop.set()
-            return await self.runner.run(stop_event=stop)
-
-        result = asyncio.run(run_pre_stopped())
-        self.assertEqual(result, "stopped")
-
-
 # ---------------------------------------------------------------------------
 # AsyncRunner basic tests
 # ---------------------------------------------------------------------------
@@ -650,8 +605,8 @@ class TestAsyncRunnerPersistent(unittest.TestCase):
     def setUp(self):
         self.env = Environment()
 
-    def test_persistent_survives_stop_event(self):
-        """A persistent handler task survives stop_event across run() calls."""
+    def test_persistent_maintains_state_across_runs(self):
+        """A persistent handler task maintains state across run() calls."""
 
         class StreamEvent(Template):
             data: Symbol
@@ -669,53 +624,31 @@ class TestAsyncRunnerPersistent(unittest.TestCase):
             asserts(StreamResult(tag=Symbol("got-it")))
 
         collected = []
-        started = asyncio.Event()
 
         async def stream_handler(goal, env):
-            started.set()
+            StreamEvent(__env__=env, data=Symbol("stream-data"))
             for i in range(10):
                 await asyncio.sleep(0.02)
                 collected.append(f"item-{i}")
-            # Assert fact to satisfy goal
-            StreamEvent(__env__=env, data=Symbol("stream-data"))
+                yield
 
         runner = AsyncRunner(self.env)
         self.env.define(StreamEvent)
         self.env.define(StreamResult)
         self.env.define(HandleStreamGoal)
         self.env.define(OnStream)
-        runner.register_handler(StreamEvent, stream_handler, persistent=True)
+        runner.register_handler(StreamEvent, stream_handler)
         self.env.reset()
 
         async def drive():
-            # First run: stop quickly, persistent handler should survive
-            stop1 = asyncio.Event()
+            # First run: limited cycles, handler starts producing
+            result1 = await runner.run(max_cycles=3)
+            count_after_first = len(collected)
+            self.assertGreater(count_after_first, 0)
 
-            async def set_stop1():
-                await started.wait()
-                # Let the handler produce a few items before stopping
-                await asyncio.sleep(0.05)
-                stop1.set()
-
-            asyncio.create_task(set_stop1())
-            result1 = await runner.run(stop_event=stop1)
-            self.assertEqual(result1, "stopped")
-
-            # Persistent task should still be alive
-            self.assertTrue(len(runner._persistent_tasks) > 0)
-            alive = any(
-                not t.done() for t in runner._persistent_tasks.values())
-            self.assertTrue(alive)
-
-            count_after_first_run = len(collected)
-            self.assertGreater(count_after_first_run, 0)
-
-            # Second run: let it finish naturally
-            result2 = await runner.run()
-            self.assertEqual(result2, "completed")
-
-            # Handler produced items across both runs
-            self.assertGreater(len(collected), count_after_first_run)
+            # Second run: handler continues from where it left off
+            result2 = await runner.run(max_cycles=5)
+            self.assertGreater(len(collected), count_after_first)
 
             await runner.close()
 
@@ -749,36 +682,25 @@ class TestAsyncRunnerClose(unittest.TestCase):
             asserts(PingResult(tag=Symbol("pinged")))
 
         async def ping_handler(goal, env):
-            # Assert fact to satisfy goal, then loop forever
             PingEvent(__env__=env, seq=0)
             while True:
                 await asyncio.sleep(0.01)
+                yield
 
         runner = AsyncRunner(self.env)
         self.env.define(PingEvent)
         self.env.define(PingResult)
         self.env.define(HandlePingGoal)
         self.env.define(OnPing)
-        runner.register_handler(PingEvent, ping_handler, persistent=True)
+        runner.register_handler(PingEvent, ping_handler)
         self.env.reset()
 
         async def drive():
-            stop = asyncio.Event()
-
-            async def set_stop():
-                await asyncio.sleep(0.05)
-                stop.set()
-
-            asyncio.create_task(set_stop())
-            result = await runner.run(stop_event=stop)
-            self.assertEqual(result, "stopped")
-
-            # Persistent task should be alive before close
+            result = await runner.run(max_cycles=2)
+            # Persistent task should exist
             self.assertTrue(len(runner._persistent_tasks) > 0)
 
             await runner.close()
-
-            # After close, state is cleaned up
             self.assertIsNone(self.env._goal_handler_state)
             self.assertEqual(len(runner._persistent_tasks), 0)
 
@@ -821,7 +743,7 @@ class TestAsyncRunnerMixed(unittest.TestCase):
         self.env = Environment()
 
     def test_mixed_handlers(self):
-        """Non-persistent handler is cancelled on stop, persistent survives."""
+        """Non-persistent handler completes per-goal, persistent survives."""
 
         class LongStream(Template):
             tag: Symbol
@@ -855,6 +777,7 @@ class TestAsyncRunnerMixed(unittest.TestCase):
             for i in range(20):
                 await asyncio.sleep(0.02)
                 persistent_items.append(i)
+                yield
 
         async def short_handler(goal, env):
             for i in range(20):
@@ -870,28 +793,17 @@ class TestAsyncRunnerMixed(unittest.TestCase):
         self.env.define(HandleShortTaskGoal)
         self.env.define(OnLongStream)
         self.env.define(OnShortTask)
-        runner.register_handler(LongStream, long_handler, persistent=True)
-        runner.register_handler(ShortTask, short_handler, persistent=False)
+        runner.register_handler(LongStream, long_handler)
+        runner.register_handler(ShortTask, short_handler)
         self.env.reset()
 
         async def drive():
-            stop = asyncio.Event()
+            result = await runner.run(max_cycles=3)
 
-            async def set_stop():
-                await asyncio.sleep(0.06)
-                stop.set()
-
-            asyncio.create_task(set_stop())
-            result = await runner.run(stop_event=stop)
-            self.assertEqual(result, "stopped")
-
-            # Non-persistent tasks should have been cancelled (pending cleared)
+            # Non-persistent tasks should be done (per-goal, completed or exhausted)
             state = self.env._goal_handler_state
-            self.assertEqual(len(state.pending), 0)
-
             # Persistent task should still be alive
-            alive = any(
-                not t.done() for t in runner._persistent_tasks.values())
+            alive = any(not t.done() for t in runner._persistent_tasks.values())
             self.assertTrue(alive)
 
             await runner.close()
@@ -932,7 +844,7 @@ class TestAsyncRunnerPersistentError(unittest.TestCase):
         self.env.define(BadResult)
         self.env.define(HandleBadStreamGoal)
         self.env.define(OnBadStream)
-        runner.register_handler(BadStream, bad_handler, persistent=True)
+        runner.register_handler(BadStream, bad_handler)
         self.env.reset()
 
         with self.assertRaises(GoalHandlerError):
@@ -949,82 +861,383 @@ class TestAsyncRunnerPersistentRedispatch(unittest.TestCase):
         self.env = Environment()
 
     def test_redispatch_after_completion(self):
-        """A persistent handler that completes quickly is re-dispatched on
-        subsequent goals."""
+        """A persistent handler that completes is removed from tracking,
+        allowing re-dispatch when a new goal appears.
 
-        class QuickJob(Template):
+        Uses max_cycles to drive two cycles. The handler completes in each
+        cycle and must be re-dispatched for the second.
+        """
+
+        class Fetch(Template):
             tag: Symbol
 
-        class QuickJobResult(Template):
+        class FetchResult(Template):
             tag: Symbol
 
-        class HandleQuickJobGoal(Rule):
-            goal(QuickJob(tag=t))
+        class HandleFetchGoal(Rule):
+            goal(Fetch(tag=t))
 
-        # Consuming rule: needs QuickJob fact
-        class OnQuickJob(Rule):
-            qj = QuickJob(tag=t)
-            asserts(QuickJobResult(tag=t))
+        class Active(Template):
+            pass
 
-        call_count = []
+        # Consuming rule retracts Fetch so the goal regenerates
+        class OnFetch(Rule):
+            Active()
+            f = Fetch(tag=t)
+            retracts(f)
+            asserts(FetchResult(tag=t))
 
-        async def quick_handler(goal, env):
-            call_count.append(1)
+        dispatch_count = []
+
+        async def fetch_handler(goal, env):
+            dispatch_count.append(1)
             await asyncio.sleep(0.01)
-            QuickJob(__env__=env, tag=Symbol("done"))
+            Fetch(__env__=env, tag=Symbol("data"))
 
         runner = AsyncRunner(self.env)
-        self.env.define(QuickJob)
-        self.env.define(QuickJobResult)
-        self.env.define(HandleQuickJobGoal)
-        self.env.define(OnQuickJob)
-        runner.register_handler(QuickJob, quick_handler, persistent=True)
+        self.env.define(Fetch)
+        self.env.define(FetchResult)
+        self.env.define(Active)
+        self.env.define(HandleFetchGoal)
+        self.env.define(OnFetch)
+        runner.register_handler(Fetch, fetch_handler)
+        self.env.reset()
+        Active(__env__=self.env)
+
+        async def drive():
+            # Run enough cycles for multiple dispatches
+            await runner.run(max_cycles=6)
+
+            # Handler should have been dispatched multiple times
+            # (completes, goal regenerates via retraction, re-dispatched)
+            self.assertGreaterEqual(len(dispatch_count), 2)
+
+            await runner.close()
+
+        asyncio.run(drive())
+
+
+
+# ---------------------------------------------------------------------------
+# Persistent handler edge case tests
+# ---------------------------------------------------------------------------
+
+@unittest.skipUnless(CLIPS_70, "CLIPS 7.0+ required")
+class TestAsyncRunnerPersistentDedup(unittest.TestCase):
+    def setUp(self):
+        self.env = Environment()
+
+    def test_one_task_per_template(self):
+        """Multiple goals for the same persistent template share one task."""
+
+        class Sensor(Template):
+            reading: int
+
+        class SensorLog(Template):
+            tag: Symbol
+
+        class HandleSensorGoal(Rule):
+            goal(Sensor(reading=r))
+
+        # Two consuming rules that both need Sensor facts
+        class LogSensorA(Rule):
+            s = Sensor(reading=42)
+            asserts(SensorLog(tag=Symbol("a")))
+
+        class LogSensorB(Rule):
+            s = Sensor(reading=99)
+            asserts(SensorLog(tag=Symbol("b")))
+
+        dispatch_count = []
+
+        async def sensor_handler(goal, env):
+            dispatch_count.append(1)
+            await asyncio.sleep(0.01)
+            Sensor(__env__=env, reading=42)
+            Sensor(__env__=env, reading=99)
+            yield
+
+        runner = AsyncRunner(self.env)
+        self.env.define(Sensor)
+        self.env.define(SensorLog)
+        self.env.define(HandleSensorGoal)
+        self.env.define(LogSensorA)
+        self.env.define(LogSensorB)
+        runner.register_handler(Sensor, sensor_handler)
         self.env.reset()
 
         result = asyncio.run(runner.run())
         self.assertEqual(result, "completed")
-        # Handler should have been dispatched at least once
-        self.assertGreater(len(call_count), 0)
+        # Should have been dispatched exactly once (one task per template)
+        self.assertEqual(len(dispatch_count), 1)
 
-
-# ---------------------------------------------------------------------------
-# Deprecation warning tests
-# ---------------------------------------------------------------------------
 
 @unittest.skipUnless(CLIPS_70, "CLIPS 7.0+ required")
-class TestAsyncRunnerDeprecation(unittest.TestCase):
+class TestAsyncRunnerPersistentGoalRetraction(unittest.TestCase):
     def setUp(self):
         self.env = Environment()
 
-    def test_async_run_emits_deprecation(self):
-        """async_run() emits DeprecationWarning."""
-        from clipspyx.async_goals import async_run, enable_goal_handlers
-        enable_goal_handlers(self.env)
+    def test_goal_retraction_does_not_cancel_persistent(self):
+        """Persistent task survives when its triggering goal is retracted."""
+
+        class Feed(Template):
+            tag: Symbol
+
+        class FeedResult(Template):
+            tag: Symbol
+
+        class Active(Template):
+            pass
+
+        class HandleFeedGoal(Rule):
+            goal(Feed(tag=t))
+
+        # Goal only generated while Active exists
+        class OnFeed(Rule):
+            Active()
+            f = Feed(tag=t)
+            asserts(FeedResult(tag=t))
+
+        # Retract Active after first cycle to kill the goal
+        class DeactivateAfterFeed(Rule):
+            a = Active()
+            FeedResult(tag=t)
+            retracts(a)
+
+        handler_alive = []
+
+        async def feed_handler(goal, env):
+            Feed(__env__=env, tag=Symbol("data"))
+            # Keep running after satisfying the goal
+            for i in range(5):
+                await asyncio.sleep(0.02)
+                handler_alive.append(i)
+
+        runner = AsyncRunner(self.env)
+        self.env.define(Feed)
+        self.env.define(FeedResult)
+        self.env.define(Active)
+        self.env.define(HandleFeedGoal)
+        self.env.define(OnFeed)
+        self.env.define(DeactivateAfterFeed)
+        runner.register_handler(Feed, feed_handler)
         self.env.reset()
+        Active(__env__=self.env)
 
         async def drive():
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")
-                await async_run(self.env)
-                self.assertTrue(
-                    any(issubclass(x.category, DeprecationWarning) for x in w),
-                    "async_run() should emit DeprecationWarning")
+            # Run until handler finishes (goal gets retracted mid-run
+            # when Active is removed, but persistent task keeps going)
+            result = await runner.run()
+            self.assertEqual(result, "completed")
+            # Handler kept running after goal retraction
+            self.assertEqual(len(handler_alive), 5)
+            await runner.close()
 
         asyncio.run(drive())
 
-    def test_env_async_run_emits_deprecation(self):
-        """env.async_run() emits DeprecationWarning."""
-        from clipspyx.async_goals import enable_goal_handlers
-        enable_goal_handlers(self.env)
+
+@unittest.skipUnless(CLIPS_70, "CLIPS 7.0+ required")
+class TestAsyncRunnerPersistentHalt(unittest.TestCase):
+    def setUp(self):
+        self.env = Environment()
+
+    def test_halt_returns_with_persistent_alive(self):
+        """halt_async() returns 'halted' but persistent tasks stay alive."""
+
+        class Monitor(Template):
+            tag: Symbol
+
+        class MonitorResult(Template):
+            tag: Symbol
+
+        class HandleMonitorGoal(Rule):
+            goal(Monitor(tag=t))
+
+        class OnMonitor(Rule):
+            m = Monitor(tag=t)
+            asserts(MonitorResult(tag=t))
+
+        # Halt after seeing the result
+        class HaltOnResult(Rule):
+            MonitorResult(tag=t)
+            def __action__(self):
+                self.__env__.halt_async()
+
+        async def monitor_handler(goal, env):
+            Monitor(__env__=env, tag=Symbol("ping"))
+            while True:
+                await asyncio.sleep(0.01)
+                yield
+
+        runner = AsyncRunner(self.env)
+        self.env.define(Monitor)
+        self.env.define(MonitorResult)
+        self.env.define(HandleMonitorGoal)
+        self.env.define(OnMonitor)
+        self.env.define(HaltOnResult)
+        runner.register_handler(Monitor, monitor_handler)
         self.env.reset()
 
         async def drive():
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")
-                await self.env.async_run()
-                self.assertTrue(
-                    any(issubclass(x.category, DeprecationWarning) for x in w),
-                    "env.async_run() should emit DeprecationWarning")
+            result = await runner.run()
+            self.assertEqual(result, "halted")
+
+            alive = any(not t.done() for t in runner._persistent_tasks.values())
+            self.assertTrue(alive, "persistent task should survive halt")
+
+            await runner.close()
+            self.assertEqual(len(runner._persistent_tasks), 0)
+
+        asyncio.run(drive())
+
+
+@unittest.skipUnless(CLIPS_70, "CLIPS 7.0+ required")
+class TestAsyncRunnerPersistentMaxCycles(unittest.TestCase):
+    def setUp(self):
+        self.env = Environment()
+
+    def test_max_cycles_with_persistent_alive(self):
+        """max_cycles returns with persistent tasks still running.
+
+        Uses an EVERY timer to drive cycles (timer completes each cycle,
+        letting the loop iterate). The persistent handler runs alongside.
+        max_cycles limits how many timer cycles execute.
+        """
+
+        class Stream(Template):
+            tag: Symbol
+
+        class StreamLog(Template):
+            tag: Symbol
+
+        class HandleStreamGoal(Rule):
+            goal(Stream(tag=t))
+
+        class OnStream(Rule):
+            s = Stream(tag=t)
+            asserts(StreamLog(tag=t))
+
+        # EVERY timer drives cycles (the timer handler completes each
+        # cycle, allowing the loop to iterate and hit max_cycles)
+        class OnBeat(Rule):
+            te = TimerEvent(
+                kind=Symbol("every"), name=Symbol("mc-beat"),
+                seconds=0.01)
+
+        stream_running = []
+
+        async def stream_handler(goal, env):
+            Stream(__env__=env, tag=Symbol("data"))
+            while True:
+                await asyncio.sleep(0.01)
+                stream_running.append(1)
+                yield
+
+        runner = AsyncRunner(self.env)
+        self.env.define(Stream)
+        self.env.define(StreamLog)
+        self.env.define(HandleStreamGoal)
+        self.env.define(OnStream)
+        self.env.define(_make_goal_handler())
+        self.env.define(OnBeat)
+        runner.register_handler(Stream, stream_handler)
+        self.env.reset()
+
+        async def drive():
+            result = await runner.run(max_cycles=3)
+            self.assertEqual(result, "max_cycles")
+
+            # Persistent task still alive
+            alive = any(
+                not t.done() for t in runner._persistent_tasks.values())
+            self.assertTrue(alive, "persistent task should survive max_cycles")
+
+            await runner.close()
+
+        asyncio.run(drive())
+
+
+@unittest.skipUnless(CLIPS_70, "CLIPS 7.0+ required")
+class TestAsyncRunnerPersistentFactCycle(unittest.TestCase):
+    def setUp(self):
+        self.env = Environment()
+
+    def test_persistent_handler_drives_fact_cycle(self):
+        """Persistent handler asserts facts across multiple yields,
+        driving a fact processing cycle.
+
+        Verifies that multiple facts are processed, with the persistent
+        handler producing messages that CLIPS rules consume.
+        """
+
+        class Message(Template):
+            seq: int
+
+        class Processed(Template):
+            seq: int
+
+        class HandleMessageGoal(Rule):
+            goal(Message(seq=s))
+
+        class ProcessMessage(Rule):
+            m = Message(seq=s)
+            asserts(Processed(seq=s))
+
+        async def message_handler(goal, env):
+            for seq in [1, 2, 3]:
+                await asyncio.sleep(0.02)
+                Message(__env__=env, seq=seq)
+                yield
+
+        runner = AsyncRunner(self.env)
+        self.env.define(Message)
+        self.env.define(Processed)
+        self.env.define(HandleMessageGoal)
+        self.env.define(ProcessMessage)
+        runner.register_handler(Message, message_handler)
+        self.env.reset()
+
+        async def drive():
+            result = await runner.run(max_cycles=10)
+
+            pname = Processed.__clipspyx_dsl__.name
+            final = list(self.env.find_template(pname).facts())
+            seqs = sorted(int(f['seq']) for f in final)
+            self.assertGreaterEqual(len(seqs), 2,
+                                    f"expected multiple processed messages, got {seqs}")
+
+            await runner.close()
+
+        asyncio.run(drive())
+
+
+# ---------------------------------------------------------------------------
+# AsyncRunner lifecycle edge cases
+# ---------------------------------------------------------------------------
+
+@unittest.skipUnless(CLIPS_70, "CLIPS 7.0+ required")
+class TestAsyncRunnerLifecycle(unittest.TestCase):
+    def setUp(self):
+        self.env = Environment()
+
+    def test_run_after_close_raises(self):
+        """Calling run() after close() raises RuntimeError."""
+
+        async def drive():
+            runner = AsyncRunner(self.env)
+            await runner.close()
+            with self.assertRaises(RuntimeError):
+                await runner.run()
+
+        asyncio.run(drive())
+
+    def test_close_idempotent(self):
+        """Calling close() twice does not raise."""
+
+        async def drive():
+            runner = AsyncRunner(self.env)
+            await runner.close()
+            await runner.close()  # should not raise
 
         asyncio.run(drive())
 

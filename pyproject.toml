@@ -40,4 +40,7 @@ clipspyx-ffi-64x = { workspace = true }
 clipspyx-ffi-70x = { workspace = true }
 
 [dependency-groups]
-dev = ["pytest>=8.0.0"]
+dev = [
+    "hypothesis>=6.151.9",
+    "pytest>=8.0.0",
+]

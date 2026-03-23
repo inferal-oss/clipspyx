@@ -270,20 +270,6 @@ class Environment:
         if state is not None:
             state.halted = True
 
-    async def async_run(self, limit=None, max_cycles=None, stop_event=None):
-        """Run CLIPS with async goal handler processing.
-
-        .. deprecated:: Use :meth:`async_runner` instead.
-        """
-        import warnings
-        warnings.warn(
-            "env.async_run() is deprecated, use env.async_runner()",
-            DeprecationWarning, stacklevel=2)
-        from clipspyx.async_goals import AsyncRunner
-        runner = AsyncRunner(self)
-        return await runner.run(limit=limit, max_cycles=max_cycles,
-                                stop_event=stop_event)
-
     def async_runner(self):
         """Create an AsyncRunner for this environment."""
         from clipspyx.async_goals import AsyncRunner
