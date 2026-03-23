@@ -2652,5 +2652,143 @@ class TestPythonFuncAutoRegistration(unittest.TestCase):
             f"DoubleCheckRule should NOT be activated: {activations}")
 
 
+# =============================================================================
+# min/max/pow support tests
+# =============================================================================
+
+class MinRule(Rule):
+    NumPair(x=x, y=y)
+    NumResult(value=min(x, y))
+
+
+class TestMinMaxPow(unittest.TestCase):
+    """Test min(), max(), and ** operator in LHS expressions."""
+
+    def setUp(self):
+        self.env = Environment()
+
+    # --- IR ---
+
+    def test_min_ir(self):
+        c = MinRule.__clipspyx_dsl__
+        for ce in c.conditions:
+            p = ce.pattern if hasattr(ce, 'pattern') else ce
+            if hasattr(p, 'template_name') and p.template_name.endswith('NumResult'):
+                for s in p.slots:
+                    if s.name == 'value':
+                        self.assertIsInstance(s.constraint, FuncCallConstraint)
+                        self.assertEqual(s.constraint.func_name, 'min')
+                        self.assertEqual(s.constraint.args, ['?x', '?y'])
+                        return
+        self.fail("min constraint not found")
+
+    # --- ppform ---
+
+    def test_min_ppform(self):
+        for cls in [NumPair, NumResult]:
+            self.env.define(cls)
+        self.env.define(MinRule)
+        rule = [r for r in self.env.rules()
+                if r.name.endswith('MinRule')][0]
+        self.assertIn('=(min ?x ?y)', str(rule))
+
+    def test_max_ppform(self):
+        for cls in [NumPair, NumResult]:
+            self.env.define(cls)
+        self.env.define(MaxRule)
+        rule = [r for r in self.env.rules()
+                if r.name.endswith('MaxRule')][0]
+        self.assertIn('=(max ?x ?y)', str(rule))
+
+    # --- end-to-end ---
+
+    def test_min_end_to_end(self):
+        """min(x, y) in a return-value constraint produces correct result."""
+
+        class MinResult(Template):
+            out: int
+
+        class ComputeMin(Rule):
+            p = NumPair(x=x, y=y)
+            asserts(MinResult(out=min(x, y)))
+
+        env = self.env
+        env.define(NumPair)
+        env.define(MinResult)
+        env.define(ComputeMin)
+        env.reset()
+        NumPair(__env__=env, x=7, y=3)
+        env.run()
+
+        rname = MinResult.__clipspyx_dsl__.name
+        facts = list(env.find_template(rname).facts())
+        self.assertEqual(len(facts), 1)
+        self.assertEqual(int(facts[0]['out']), 3)
+
+    def test_max_end_to_end(self):
+        """max(x, y) in a return-value constraint produces correct result."""
+
+        class MaxResult(Template):
+            out: int
+
+        class ComputeMax(Rule):
+            p = NumPair(x=x, y=y)
+            asserts(MaxResult(out=max(x, y)))
+
+        env = self.env
+        env.define(NumPair)
+        env.define(MaxResult)
+        env.define(ComputeMax)
+        env.reset()
+        NumPair(__env__=env, x=7, y=3)
+        env.run()
+
+        rname = MaxResult.__clipspyx_dsl__.name
+        facts = list(env.find_template(rname).facts())
+        self.assertEqual(len(facts), 1)
+        self.assertEqual(int(facts[0]['out']), 7)
+
+    def test_pow_operator(self):
+        """** operator in a return-value constraint produces correct result."""
+
+        class PowResult(Template):
+            out: float  # CLIPS ** returns FLOAT
+
+        class ComputePow(Rule):
+            c = Counter(value=v)
+            asserts(PowResult(out=v ** 2))
+
+        env = self.env
+        env.define(Counter)
+        env.define(PowResult)
+        env.define(ComputePow)
+        env.reset()
+        Counter(__env__=env, value=5)
+        env.run()
+
+        rname = PowResult.__clipspyx_dsl__.name
+        facts = list(env.find_template(rname).facts())
+        self.assertEqual(len(facts), 1)
+        self.assertEqual(float(facts[0]['out']), 25.0)
+
+    def test_pow_ppform(self):
+        """** compiles to CLIPS (** v 2) syntax."""
+
+        class PowResult2(Template):
+            out: float
+
+        class PowPPRule(Rule):
+            c = Counter(value=v)
+            asserts(PowResult2(out=v ** 3))
+
+        env = self.env
+        env.define(Counter)
+        env.define(PowResult2)
+        env.define(PowPPRule)
+        rule = [r for r in env.rules()
+                if r.name.endswith('PowPPRule')][0]
+        self.assertIn('(** ?v 3)', str(rule))
+
+
 if __name__ == '__main__':
     unittest.main()

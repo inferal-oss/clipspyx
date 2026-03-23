@@ -547,6 +547,8 @@ def _binop_to_clips(op) -> str:
         return '/'
     if isinstance(op, cst.Modulo):
         return 'mod'
+    if isinstance(op, cst.Power):
+        return '**'
     return '?'
 
 

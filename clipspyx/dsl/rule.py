@@ -32,6 +32,8 @@ class _Placeholder:
     def __rtruediv__(self, other): return _Placeholder()
     def __mod__(self, other): return _Placeholder()
     def __rmod__(self, other): return _Placeholder()
+    def __pow__(self, other): return _Placeholder()
+    def __rpow__(self, other): return _Placeholder()
 
     # Bitwise (for | used as or-CE)
     def __or__(self, other): return _Placeholder()

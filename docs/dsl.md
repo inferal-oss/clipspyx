@@ -503,6 +503,7 @@ All Python arithmetic operators are supported:
 | `x * y` | `=(* ?x ?y)` |
 | `x / y` | `=(/ ?x ?y)` |
 | `x % y` | `=(mod ?x ?y)` |
+| `x ** y` | `=(** ?x ?y)` (returns FLOAT) |
 
 Expressions can be nested and mix variables with literals:
 
@@ -532,6 +533,7 @@ CLIPS built-in functions can be called directly in slot positions:
 
 ```python
 Result(value=abs(x))           # =(abs ?x)
+Result(value=min(x, y))        # =(min ?x ?y)
 Result(value=max(x, y))        # =(max ?x ?y)
 Result(value=x + abs(y))       # =(+ ?x (abs ?y))
 ```
