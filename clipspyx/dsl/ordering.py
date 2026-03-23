@@ -164,15 +164,19 @@ def compute_ordering_salience(pending, leaf_names=frozenset()):
     # cannot change). Formula: salience = offset - layer.
     # For a leaf at layer L with existing salience S: offset = S + L.
     # Use the max offset across all leaves so all values stay consistent.
-    offset = 0
+    # When no leaves exist, default offset 0 places the first group at
+    # salience 0 and subsequent groups decrement from there.
+    offset = None
     for qname in leaf_names:
         if qname in pending:
             cls, rdef = pending[qname]
             existing = rdef.salience if rdef.salience is not None else 0
             rep = uf.find(qname)
             candidate = existing + layers[rep]
-            if candidate > offset:
+            if offset is None or candidate > offset:
                 offset = candidate
+    if offset is None:
+        offset = 0
 
     result = {}
     for qname in pending:

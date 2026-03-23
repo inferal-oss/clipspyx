@@ -2303,6 +2303,66 @@ class TestOrderingEndToEnd(unittest.TestCase):
         self.assertIn('A1', results[:2])
         self.assertIn('A2', results[:2])
 
+    def test_concurrent_in_chained_ordering(self):
+        """concurrent() must inherit correct salience in multi-level chains.
+
+        Chain: Anchor -> Middle -> concurrent(Middle) target
+        When Middle gets negative salience (after Anchor), concurrent(Middle)
+        must get the same negative salience, not default 0.
+        """
+        results = []
+
+        class ChainAnchor(Rule):
+            Person(name=name)
+
+            def __action__(self):
+                results.append('anchor')
+
+        class ChainMiddle(Rule):
+            after(ChainAnchor)
+            Person(name=name)
+
+            def __action__(self):
+                results.append('middle')
+
+        class ChainLate(Rule):
+            after(ChainMiddle)
+            Person(name=name)
+
+            def __action__(self):
+                results.append('late')
+
+        class ChainLatePeer(Rule):
+            concurrent(ChainLate)
+            Person(name=name)
+
+            def __action__(self):
+                results.append('late_peer')
+
+        env = Environment()
+        PersonAssert = env.define(Person)
+        env.define(ChainAnchor)
+        env.define(ChainMiddle)
+        env.define(ChainLate)
+        env.define(ChainLatePeer)
+        env.reset()
+
+        PersonAssert(name='test')
+        env.run()
+
+        # ChainLate and ChainLatePeer must have the same salience
+        self.assertEqual(
+            ChainLate.__clipspyx_dsl__.salience,
+            ChainLatePeer.__clipspyx_dsl__.salience,
+            f"concurrent rule should match target salience: "
+            f"ChainLate={ChainLate.__clipspyx_dsl__.salience}, "
+            f"ChainLatePeer={ChainLatePeer.__clipspyx_dsl__.salience}")
+
+        # Ordering: anchor fires first, middle second, late/late_peer last
+        self.assertEqual(results[0], 'anchor')
+        self.assertEqual(results[1], 'middle')
+        self.assertSetEqual(set(results[2:]), {'late', 'late_peer'})
+
 
 # --- Templates for return-value constraint tests ---
 

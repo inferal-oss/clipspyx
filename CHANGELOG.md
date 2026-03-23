@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `concurrent()` ordering in multi-level chains: when a concurrent target had
+  already-resolved negative salience (from being defined in an earlier ordering
+  batch), the concurrent rule incorrectly received salience 0 instead of
+  matching its target; caused rules to fire out of order in pipelines with 3+
+  ordering levels
+
 ## [0.6.0] - 2026-03-22
 
 ### Added
