@@ -28,7 +28,7 @@
 # EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
-__version__ = '0.6.0'
+__version__ = '0.6.1'
 
 
 __all__ = ('CLIPSError',
