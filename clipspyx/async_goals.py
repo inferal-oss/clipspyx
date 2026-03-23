@@ -169,92 +169,198 @@ async def _wait_event(event):
 async def async_run(env, limit=None, max_cycles=None, stop_event=None):
     """Run the CLIPS engine with async goal handler processing.
 
-    Interleaves synchronous CLIPS execution with async event processing:
-    1. Run CLIPS until agenda is empty
-    2. Scan goals for registered handlers
-    3. Dispatch matching goals to async handlers
-    4. Wait for at least one handler to complete
-    5. Loop back to step 1
-
-    Returns a string indicating why the loop stopped:
-    - "completed": no goals remain, no pending handlers
-    - "max_cycles": reached the max_cycles limit
-    - "halted": halt_async() was called (internal cancellation)
-    - "stopped": stop_event was set (external cancellation)
+    .. deprecated::
+        Use :class:`AsyncRunner` instead for better lifecycle management
+        and persistent handler support.
     """
-    state = env._goal_handler_state
-    if state is None:
-        raise RuntimeError("Call enable_goal_handlers(env) first")
+    import warnings
+    warnings.warn(
+        "async_run() is deprecated, use AsyncRunner instead",
+        DeprecationWarning, stacklevel=2)
+    runner = AsyncRunner(env)
+    return await runner.run(limit=limit, max_cycles=max_cycles,
+                            stop_event=stop_event)
 
-    state.halted = False
-    cycle = 0
-    while max_cycles is None or cycle < max_cycles:
-        cycle += 1
 
-        # Check cancellation signals
-        if state.halted:
-            return "halted"
-        if stop_event is not None and stop_event.is_set():
-            return "stopped"
+# ---------------------------------------------------------------------------
+# AsyncRunner - resource context for async goal handling
+# ---------------------------------------------------------------------------
 
-        # Run CLIPS synchronously (process agenda).
-        # This fires rules that matched facts asserted by handlers
-        # in the previous cycle.
-        env.run(limit)
+class AsyncRunner:
+    """Manages async goal handler lifecycle across multiple run() calls.
 
-        # Check halt after run (rules may have called halt_async)
-        if state.halted:
-            return "halted"
+    Unlike the deprecated ``async_run()`` function, ``AsyncRunner`` owns the
+    full goal handler lifecycle: it auto-enables on creation and disables on
+    ``close()``.  Persistent handler tasks survive when ``stop_event`` fires
+    and are only cancelled by ``close()``.
 
-        # Auto-retract periodic timer-event facts AFTER run() processes them,
-        # so goals regenerate for the next cycle.
-        _retract_periodic_facts(env, state)
+    Usage::
 
-        # Scan goals for new dispatches
-        for goal in env.goals():
-            idx = goal.index
-            if idx in state.pending:
-                continue
-            handler = state.handlers.get(goal.template.name)
-            if handler is not None:
-                task = asyncio.create_task(handler(goal, env))
-                state.pending[idx] = task
+        async with AsyncRunner(env) as runner:
+            runner.register_handler(MyTemplate, my_handler, persistent=True)
+            while not done:
+                work_ready.clear()
+                result = await runner.run(stop_event=work_ready)
+        # close() called automatically - all tasks cancelled, handlers disabled
+    """
 
-        # Cancel tasks for retracted goals
-        for idx in list(state.pending):
-            try:
-                env.find_goal(idx)
-            except LookupError:
-                state.pending.pop(idx).cancel()
+    def __init__(self, env):
+        state = getattr(env, '_goal_handler_state', None)
+        if state is None:
+            enable_goal_handlers(env)
+        self.env = env
+        self._persistent_templates = set()   # template names marked persistent
+        self._persistent_tasks = {}          # template_name -> asyncio.Task
+        self._closed = False
 
-        if not state.pending:
-            return "completed"
+    def register_handler(self, template, handler, persistent=False):
+        """Register an async handler for goals matching a template.
 
-        # Wait for at least one handler to complete, or stop_event
-        if stop_event is not None:
-            stop_task = asyncio.create_task(_wait_event(stop_event))
-            pending_set = set(state.pending.values()) | {stop_task}
-            done, _ = await asyncio.wait(
-                pending_set, return_when=asyncio.FIRST_COMPLETED)
-            stop_task.cancel()
-            if stop_event.is_set():
-                for t in state.pending.values():
-                    t.cancel()
-                state.pending.clear()
+        If ``persistent=True``, the handler task survives across ``run()``
+        calls when ``stop_event`` fires.  Only ``close()`` cancels it.
+        Persistent tasks are keyed per-template (one task per template type).
+        """
+        register_goal_handler(self.env, template, handler)
+        if persistent:
+            name = template if isinstance(template, str) \
+                else template.__clipspyx_dsl__.name
+            self._persistent_templates.add(name)
+
+    async def run(self, limit=None, max_cycles=None, stop_event=None):
+        """Run the CLIPS engine with async goal handler processing.
+
+        Returns a string indicating why the loop stopped:
+
+        - ``"completed"``: no goals remain, no pending handlers
+        - ``"max_cycles"``: reached the *max_cycles* limit
+        - ``"halted"``: ``halt_async()`` was called (internal cancellation)
+        - ``"stopped"``: *stop_event* was set (external cancellation)
+        """
+        state = self.env._goal_handler_state
+        if state is None:
+            raise RuntimeError("Call enable_goal_handlers(env) first")
+
+        state.halted = False
+        cycle = 0
+        while max_cycles is None or cycle < max_cycles:
+            cycle += 1
+
+            # Check cancellation signals
+            if state.halted:
+                return "halted"
+            if stop_event is not None and stop_event.is_set():
                 return "stopped"
-        else:
-            done, _ = await asyncio.wait(
-                state.pending.values(), return_when=asyncio.FIRST_COMPLETED)
 
-        # Process completed tasks
-        for task in done:
-            # Remove from pending
-            for idx, t in list(state.pending.items()):
-                if t is task:
-                    del state.pending[idx]
-                    break
-            if not task.cancelled() and task.exception():
-                raise GoalHandlerError(
-                    f"Handler failed: {task.exception()}") from task.exception()
+            # Run CLIPS synchronously (process agenda).
+            self.env.run(limit)
 
-    return "max_cycles"
+            # Check halt after run (rules may have called halt_async)
+            if state.halted:
+                return "halted"
+
+            # Auto-retract periodic timer-event facts AFTER run() processes
+            # them, so goals regenerate for the next cycle.
+            _retract_periodic_facts(self.env, state)
+
+            # Scan goals for new dispatches
+            for goal in self.env.goals():
+                tname = goal.template.name
+                if tname in self._persistent_templates:
+                    # One task per persistent template
+                    if (tname in self._persistent_tasks
+                            and not self._persistent_tasks[tname].done()):
+                        continue
+                    handler = state.handlers.get(tname)
+                    if handler is not None:
+                        self._persistent_tasks[tname] = \
+                            asyncio.create_task(handler(goal, self.env))
+                else:
+                    # Per-goal task (same as legacy async_run)
+                    idx = goal.index
+                    if idx in state.pending:
+                        continue
+                    handler = state.handlers.get(tname)
+                    if handler is not None:
+                        state.pending[idx] = \
+                            asyncio.create_task(handler(goal, self.env))
+
+            # Cancel tasks for retracted goals (non-persistent only)
+            for idx in list(state.pending):
+                try:
+                    self.env.find_goal(idx)
+                except LookupError:
+                    state.pending.pop(idx).cancel()
+
+            # Check completion
+            active_persistent = {
+                n: t for n, t in self._persistent_tasks.items()
+                if not t.done()
+            }
+            if not state.pending and not active_persistent:
+                return "completed"
+
+            # Build wait set from both non-persistent and persistent tasks
+            wait_set = set(state.pending.values()) | set(
+                t for t in self._persistent_tasks.values() if not t.done()
+            )
+            if not wait_set:
+                return "completed"
+
+            # Wait for at least one handler to complete, or stop_event
+            if stop_event is not None:
+                stop_task = asyncio.create_task(_wait_event(stop_event))
+                wait_set.add(stop_task)
+                done, _ = await asyncio.wait(
+                    wait_set, return_when=asyncio.FIRST_COMPLETED)
+                stop_task.cancel()
+                if stop_event.is_set():
+                    # Cancel ONLY non-persistent tasks
+                    for t in state.pending.values():
+                        t.cancel()
+                    state.pending.clear()
+                    return "stopped"
+            else:
+                done, _ = await asyncio.wait(
+                    wait_set, return_when=asyncio.FIRST_COMPLETED)
+
+            # Process completed tasks
+            for task in done:
+                # Remove from non-persistent pending
+                for idx, t in list(state.pending.items()):
+                    if t is task:
+                        del state.pending[idx]
+                        break
+                # Remove from persistent tasks
+                for name, t in list(self._persistent_tasks.items()):
+                    if t is task:
+                        del self._persistent_tasks[name]
+                        break
+                if not task.cancelled() and task.exception():
+                    raise GoalHandlerError(
+                        f"Handler failed: {task.exception()}"
+                    ) from task.exception()
+
+        return "max_cycles"
+
+    async def close(self):
+        """Cancel all tasks (persistent and non-persistent) and disable
+        goal handlers.
+        """
+        if self._closed:
+            return
+        for task in self._persistent_tasks.values():
+            task.cancel()
+        self._persistent_tasks.clear()
+        state = self.env._goal_handler_state
+        if state is not None:
+            for task in state.pending.values():
+                task.cancel()
+            state.pending.clear()
+        disable_goal_handlers(self.env)
+        self._closed = True
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        await self.close()

@@ -8,10 +8,12 @@ Uses the DSL for rule/template definitions.
 import asyncio
 import time
 import unittest
+import warnings
 
 import clipspyx
 from clipspyx import Environment, Symbol
 from clipspyx.dsl import Template, Rule, TimerEvent, AFTER, AT, EVERY
+from clipspyx.async_goals import AsyncRunner, GoalHandlerError
 
 CLIPS_70 = clipspyx.CLIPS_MAJOR >= 7
 
@@ -102,19 +104,21 @@ class TestGuard64x(unittest.TestCase):
 class TestAsyncRunBasic(unittest.TestCase):
     def setUp(self):
         self.env = Environment()
-        from clipspyx.async_goals import enable_goal_handlers
-        enable_goal_handlers(self.env)
+        self.runner = AsyncRunner(self.env)
 
     def test_async_run_no_goals(self):
         """async_run returns immediately when no goals exist."""
         self.env.reset()
-        asyncio.run(self.env.async_run())
+        asyncio.run(self.runner.run())
 
-    def test_async_run_without_enable_raises(self):
-        """async_run raises if enable not called."""
+    def test_runner_auto_enables(self):
+        """AsyncRunner auto-enables goal handlers if not already enabled."""
         env = Environment()
-        with self.assertRaises(RuntimeError):
-            asyncio.run(env.async_run())
+        runner = AsyncRunner(env)
+        self.assertIsNotNone(env._goal_handler_state)
+        env.reset()
+        result = asyncio.run(runner.run())
+        self.assertEqual(result, "completed")
 
 
 # ---------------------------------------------------------------------------
@@ -125,8 +129,7 @@ class TestAsyncRunBasic(unittest.TestCase):
 class TestTimerAfter(unittest.TestCase):
     def setUp(self):
         self.env = Environment()
-        from clipspyx.async_goals import enable_goal_handlers
-        enable_goal_handlers(self.env)
+        self.runner = AsyncRunner(self.env)
 
     def test_timer_after_fires(self):
         """One-shot timer asserts a fact after the delay."""
@@ -142,7 +145,7 @@ class TestTimerAfter(unittest.TestCase):
         self.env.reset()
 
         start = time.time()
-        asyncio.run(self.env.async_run())
+        asyncio.run(self.runner.run())
         elapsed = time.time() - start
 
         self.assertGreaterEqual(elapsed, 0.04)
@@ -162,7 +165,7 @@ class TestTimerAfter(unittest.TestCase):
         self.env.define(OnTimerFired)
         self.env.reset()
 
-        asyncio.run(self.env.async_run())
+        asyncio.run(self.runner.run())
 
         timer_facts = [f for f in self.env.find_template('timer-event').facts()]
         self.assertEqual(len(timer_facts), 1)
@@ -182,8 +185,7 @@ class ScheduleConfig(Template):
 class TestTimerAt(unittest.TestCase):
     def setUp(self):
         self.env = Environment()
-        from clipspyx.async_goals import enable_goal_handlers
-        enable_goal_handlers(self.env)
+        self.runner = AsyncRunner(self.env)
 
     def test_timer_at_fires(self):
         """Absolute time timer fires at the target time."""
@@ -203,7 +205,7 @@ class TestTimerAt(unittest.TestCase):
         scname = ScheduleConfig.__clipspyx_dsl__.name
         self.env.find_template(scname).assert_fact(target_time=target)
 
-        asyncio.run(self.env.async_run())
+        asyncio.run(self.runner.run())
 
         rname = TimerResult.__clipspyx_dsl__.name
         results = [f for f in self.env.find_template(rname).facts()]
@@ -229,7 +231,7 @@ class TestTimerAt(unittest.TestCase):
         self.env.find_template(scname).assert_fact(target_time=target)
 
         start = time.time()
-        asyncio.run(self.env.async_run())
+        asyncio.run(self.runner.run())
         elapsed = time.time() - start
 
         self.assertLess(elapsed, 1.0)
@@ -246,8 +248,7 @@ class TestTimerAt(unittest.TestCase):
 class TestTimerEvery(unittest.TestCase):
     def setUp(self):
         self.env = Environment()
-        from clipspyx.async_goals import enable_goal_handlers
-        enable_goal_handlers(self.env)
+        self.runner = AsyncRunner(self.env)
 
     def test_timer_every_fires_multiple_times(self):
         """Periodic timer fires multiple times with incrementing count."""
@@ -266,7 +267,7 @@ class TestTimerEvery(unittest.TestCase):
         self.env.define(OnBeat)
         self.env.reset()
 
-        asyncio.run(self.env.async_run(max_cycles=4))
+        asyncio.run(self.runner.run(max_cycles=4))
 
         blname = BeatLog.__clipspyx_dsl__.name
         logs = sorted(
@@ -309,7 +310,7 @@ class TestTimerEvery(unittest.TestCase):
         Active(__env__=self.env)
 
         # Should exit on its own - no max_cycles needed
-        asyncio.run(self.env.async_run())
+        asyncio.run(self.runner.run())
 
         blname = BeatLog2.__clipspyx_dsl__.name
         logs = [f for f in self.env.find_template(blname).facts()]
@@ -329,8 +330,7 @@ class TestTimerEvery(unittest.TestCase):
 class TestConcurrentGoals(unittest.TestCase):
     def setUp(self):
         self.env = Environment()
-        from clipspyx.async_goals import enable_goal_handlers
-        enable_goal_handlers(self.env)
+        self.runner = AsyncRunner(self.env)
 
     def test_concurrent_timers(self):
         """Multiple timer goals dispatch concurrently."""
@@ -355,7 +355,7 @@ class TestConcurrentGoals(unittest.TestCase):
         self.env.reset()
 
         start = time.time()
-        asyncio.run(self.env.async_run())
+        asyncio.run(self.runner.run())
         elapsed = time.time() - start
 
         crname = ConcResult.__clipspyx_dsl__.name
@@ -373,8 +373,7 @@ class TestConcurrentGoals(unittest.TestCase):
 class TestHandlerError(unittest.TestCase):
     def setUp(self):
         self.env = Environment()
-        from clipspyx.async_goals import enable_goal_handlers
-        enable_goal_handlers(self.env)
+        self.runner = AsyncRunner(self.env)
 
         class FailingOp(Template):
             x: int
@@ -384,7 +383,7 @@ class TestHandlerError(unittest.TestCase):
 
         self.env.define(FailingOp)
         self.FailingOp = FailingOp
-        self.env.register_goal_handler(FailingOp, bad_handler)
+        self.runner.register_handler(FailingOp, bad_handler)
 
     def test_handler_error_propagates(self):
         """Handler exceptions are wrapped in GoalHandlerError."""
@@ -402,7 +401,7 @@ class TestHandlerError(unittest.TestCase):
         self.env.reset()
 
         with self.assertRaises(GoalHandlerError):
-            asyncio.run(self.env.async_run())
+            asyncio.run(self.runner.run())
 
 
 # ---------------------------------------------------------------------------
@@ -413,8 +412,7 @@ class TestHandlerError(unittest.TestCase):
 class TestCustomGoalHandler(unittest.TestCase):
     def setUp(self):
         self.env = Environment()
-        from clipspyx.async_goals import enable_goal_handlers
-        enable_goal_handlers(self.env)
+        self.runner = AsyncRunner(self.env)
 
         class ComputeRequest(Template):
             input: int
@@ -434,7 +432,7 @@ class TestCustomGoalHandler(unittest.TestCase):
 
         self.env.define(ComputeRequest)
         self.env.define(ComputeResponse)
-        self.env.register_goal_handler(ComputeRequest, compute_handler)
+        self.runner.register_handler(ComputeRequest, compute_handler)
 
     def test_custom_handler_fulfills_goal(self):
         """Custom async handler asserts facts that satisfy the goal."""
@@ -457,7 +455,7 @@ class TestCustomGoalHandler(unittest.TestCase):
         self.env.define(Process)
         self.env.reset()
 
-        asyncio.run(self.env.async_run())
+        asyncio.run(self.runner.run())
 
         resp_name = ComputeResponse.__clipspyx_dsl__.name
         results = [f for f in self.env.find_template(resp_name).facts()]
@@ -473,8 +471,7 @@ class TestCustomGoalHandler(unittest.TestCase):
 class TestReturnValues(unittest.TestCase):
     def setUp(self):
         self.env = Environment()
-        from clipspyx.async_goals import enable_goal_handlers
-        enable_goal_handlers(self.env)
+        self.runner = AsyncRunner(self.env)
 
     def test_completed_return_value(self):
         """async_run returns 'completed' when no goals remain."""
@@ -489,7 +486,7 @@ class TestReturnValues(unittest.TestCase):
         self.env.define(OnTimer)
         self.env.reset()
 
-        result = asyncio.run(self.env.async_run())
+        result = asyncio.run(self.runner.run())
         self.assertEqual(result, "completed")
 
     def test_max_cycles_return_value(self):
@@ -504,7 +501,7 @@ class TestReturnValues(unittest.TestCase):
         self.env.define(OnBeat)
         self.env.reset()
 
-        result = asyncio.run(self.env.async_run(max_cycles=2))
+        result = asyncio.run(self.runner.run(max_cycles=2))
         self.assertEqual(result, "max_cycles")
 
 
@@ -512,8 +509,7 @@ class TestReturnValues(unittest.TestCase):
 class TestHaltAsync(unittest.TestCase):
     def setUp(self):
         self.env = Environment()
-        from clipspyx.async_goals import enable_goal_handlers
-        enable_goal_handlers(self.env)
+        self.runner = AsyncRunner(self.env)
 
     def test_halt_async_stops_loop(self):
         """halt_async() called from a rule action stops the loop."""
@@ -538,7 +534,7 @@ class TestHaltAsync(unittest.TestCase):
         self.env.define(StopAt3)
         self.env.reset()
 
-        result = asyncio.run(self.env.async_run())
+        result = asyncio.run(self.runner.run())
         self.assertEqual(result, "halted")
 
         bcname = BeatCount.__clipspyx_dsl__.name
@@ -556,8 +552,7 @@ class TestHaltAsync(unittest.TestCase):
 class TestStopEvent(unittest.TestCase):
     def setUp(self):
         self.env = Environment()
-        from clipspyx.async_goals import enable_goal_handlers
-        enable_goal_handlers(self.env)
+        self.runner = AsyncRunner(self.env)
 
     def test_stop_event_stops_loop(self):
         """Setting stop_event from an external task stops the loop."""
@@ -579,7 +574,7 @@ class TestStopEvent(unittest.TestCase):
                 stop.set()
 
             asyncio.create_task(set_stop())
-            return await self.env.async_run(stop_event=stop)
+            return await self.runner.run(stop_event=stop)
 
         result = asyncio.run(run_with_stop())
         self.assertEqual(result, "stopped")
@@ -598,10 +593,440 @@ class TestStopEvent(unittest.TestCase):
         async def run_pre_stopped():
             stop = asyncio.Event()
             stop.set()
-            return await self.env.async_run(stop_event=stop)
+            return await self.runner.run(stop_event=stop)
 
         result = asyncio.run(run_pre_stopped())
         self.assertEqual(result, "stopped")
+
+
+# ---------------------------------------------------------------------------
+# AsyncRunner basic tests
+# ---------------------------------------------------------------------------
+
+@unittest.skipUnless(CLIPS_70, "CLIPS 7.0+ required")
+class TestAsyncRunnerBasic(unittest.TestCase):
+    def setUp(self):
+        self.env = Environment()
+
+    def test_runner_no_goals(self):
+        """AsyncRunner.run returns 'completed' when no goals exist."""
+        runner = AsyncRunner(self.env)
+        self.env.reset()
+        result = asyncio.run(runner.run())
+        self.assertEqual(result, "completed")
+
+    def test_runner_timer(self):
+        """AsyncRunner fires a timer handler just like async_run."""
+        runner = AsyncRunner(self.env)
+
+        class OnTimer(Rule):
+            te = TimerEvent(
+                kind=Symbol("after"), name=Symbol("runner-test"), seconds=0.02)
+            asserts(TimerResult(msg=Symbol("runner-done")))
+
+        self.env.define(TimerResult)
+        self.env.define(_make_goal_handler())
+        self.env.define(OnTimer)
+        self.env.reset()
+
+        start = time.time()
+        result = asyncio.run(runner.run())
+        elapsed = time.time() - start
+
+        self.assertEqual(result, "completed")
+        self.assertGreaterEqual(elapsed, 0.01)
+        rname = TimerResult.__clipspyx_dsl__.name
+        results = [f for f in self.env.find_template(rname).facts()]
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['msg'], Symbol('runner-done'))
+
+
+# ---------------------------------------------------------------------------
+# AsyncRunner persistent handler tests
+# ---------------------------------------------------------------------------
+
+@unittest.skipUnless(CLIPS_70, "CLIPS 7.0+ required")
+class TestAsyncRunnerPersistent(unittest.TestCase):
+    def setUp(self):
+        self.env = Environment()
+
+    def test_persistent_survives_stop_event(self):
+        """A persistent handler task survives stop_event across run() calls."""
+
+        class StreamEvent(Template):
+            data: Symbol
+
+        class StreamResult(Template):
+            tag: Symbol
+
+        # Goal handler rule: tells CLIPS to generate goals for StreamEvent
+        class HandleStreamGoal(Rule):
+            goal(StreamEvent(data=d))
+
+        # Consuming rule: needs StreamEvent -> triggers goal generation
+        class OnStream(Rule):
+            se = StreamEvent(data=d)
+            asserts(StreamResult(tag=Symbol("got-it")))
+
+        collected = []
+        started = asyncio.Event()
+
+        async def stream_handler(goal, env):
+            started.set()
+            for i in range(10):
+                await asyncio.sleep(0.02)
+                collected.append(f"item-{i}")
+            # Assert fact to satisfy goal
+            StreamEvent(__env__=env, data=Symbol("stream-data"))
+
+        runner = AsyncRunner(self.env)
+        self.env.define(StreamEvent)
+        self.env.define(StreamResult)
+        self.env.define(HandleStreamGoal)
+        self.env.define(OnStream)
+        runner.register_handler(StreamEvent, stream_handler, persistent=True)
+        self.env.reset()
+
+        async def drive():
+            # First run: stop quickly, persistent handler should survive
+            stop1 = asyncio.Event()
+
+            async def set_stop1():
+                await started.wait()
+                # Let the handler produce a few items before stopping
+                await asyncio.sleep(0.05)
+                stop1.set()
+
+            asyncio.create_task(set_stop1())
+            result1 = await runner.run(stop_event=stop1)
+            self.assertEqual(result1, "stopped")
+
+            # Persistent task should still be alive
+            self.assertTrue(len(runner._persistent_tasks) > 0)
+            alive = any(
+                not t.done() for t in runner._persistent_tasks.values())
+            self.assertTrue(alive)
+
+            count_after_first_run = len(collected)
+            self.assertGreater(count_after_first_run, 0)
+
+            # Second run: let it finish naturally
+            result2 = await runner.run()
+            self.assertEqual(result2, "completed")
+
+            # Handler produced items across both runs
+            self.assertGreater(len(collected), count_after_first_run)
+
+            await runner.close()
+
+        asyncio.run(drive())
+
+
+# ---------------------------------------------------------------------------
+# AsyncRunner close tests
+# ---------------------------------------------------------------------------
+
+@unittest.skipUnless(CLIPS_70, "CLIPS 7.0+ required")
+class TestAsyncRunnerClose(unittest.TestCase):
+    def setUp(self):
+        self.env = Environment()
+
+    def test_close_cancels_persistent(self):
+        """close() cancels persistent handlers and clears state."""
+
+        class PingEvent(Template):
+            seq: int
+
+        class PingResult(Template):
+            tag: Symbol
+
+        class HandlePingGoal(Rule):
+            goal(PingEvent(seq=s))
+
+        # Consuming rule to trigger goal generation
+        class OnPing(Rule):
+            pe = PingEvent(seq=s)
+            asserts(PingResult(tag=Symbol("pinged")))
+
+        async def ping_handler(goal, env):
+            # Assert fact to satisfy goal, then loop forever
+            PingEvent(__env__=env, seq=0)
+            while True:
+                await asyncio.sleep(0.01)
+
+        runner = AsyncRunner(self.env)
+        self.env.define(PingEvent)
+        self.env.define(PingResult)
+        self.env.define(HandlePingGoal)
+        self.env.define(OnPing)
+        runner.register_handler(PingEvent, ping_handler, persistent=True)
+        self.env.reset()
+
+        async def drive():
+            stop = asyncio.Event()
+
+            async def set_stop():
+                await asyncio.sleep(0.05)
+                stop.set()
+
+            asyncio.create_task(set_stop())
+            result = await runner.run(stop_event=stop)
+            self.assertEqual(result, "stopped")
+
+            # Persistent task should be alive before close
+            self.assertTrue(len(runner._persistent_tasks) > 0)
+
+            await runner.close()
+
+            # After close, state is cleaned up
+            self.assertIsNone(self.env._goal_handler_state)
+            self.assertEqual(len(runner._persistent_tasks), 0)
+
+        asyncio.run(drive())
+
+
+# ---------------------------------------------------------------------------
+# AsyncRunner context manager tests
+# ---------------------------------------------------------------------------
+
+@unittest.skipUnless(CLIPS_70, "CLIPS 7.0+ required")
+class TestAsyncRunnerContextManager(unittest.TestCase):
+    def setUp(self):
+        self.env = Environment()
+
+    def test_context_manager(self):
+        """async with AsyncRunner auto-enables and auto-closes."""
+
+        async def drive():
+            async with AsyncRunner(self.env) as runner:
+                # Inside the context, state should exist
+                self.assertIsNotNone(self.env._goal_handler_state)
+                self.env.reset()
+                result = await runner.run()
+                self.assertEqual(result, "completed")
+
+            # After exit, state should be cleaned up
+            self.assertIsNone(self.env._goal_handler_state)
+
+        asyncio.run(drive())
+
+
+# ---------------------------------------------------------------------------
+# AsyncRunner mixed handler tests
+# ---------------------------------------------------------------------------
+
+@unittest.skipUnless(CLIPS_70, "CLIPS 7.0+ required")
+class TestAsyncRunnerMixed(unittest.TestCase):
+    def setUp(self):
+        self.env = Environment()
+
+    def test_mixed_handlers(self):
+        """Non-persistent handler is cancelled on stop, persistent survives."""
+
+        class LongStream(Template):
+            tag: Symbol
+
+        class ShortTask(Template):
+            tag: Symbol
+
+        class MixedResult(Template):
+            tag: Symbol
+
+        class HandleLongStreamGoal(Rule):
+            goal(LongStream(tag=t))
+
+        class HandleShortTaskGoal(Rule):
+            goal(ShortTask(tag=t))
+
+        # Consuming rules to trigger goal generation
+        class OnLongStream(Rule):
+            ls = LongStream(tag=t)
+            asserts(MixedResult(tag=Symbol("long")))
+
+        class OnShortTask(Rule):
+            st = ShortTask(tag=t)
+            asserts(MixedResult(tag=Symbol("short")))
+
+        persistent_items = []
+        nonpersistent_items = []
+
+        async def long_handler(goal, env):
+            LongStream(__env__=env, tag=Symbol("data"))
+            for i in range(20):
+                await asyncio.sleep(0.02)
+                persistent_items.append(i)
+
+        async def short_handler(goal, env):
+            for i in range(20):
+                await asyncio.sleep(0.02)
+                nonpersistent_items.append(i)
+            ShortTask(__env__=env, tag=Symbol("done"))
+
+        runner = AsyncRunner(self.env)
+        self.env.define(LongStream)
+        self.env.define(ShortTask)
+        self.env.define(MixedResult)
+        self.env.define(HandleLongStreamGoal)
+        self.env.define(HandleShortTaskGoal)
+        self.env.define(OnLongStream)
+        self.env.define(OnShortTask)
+        runner.register_handler(LongStream, long_handler, persistent=True)
+        runner.register_handler(ShortTask, short_handler, persistent=False)
+        self.env.reset()
+
+        async def drive():
+            stop = asyncio.Event()
+
+            async def set_stop():
+                await asyncio.sleep(0.06)
+                stop.set()
+
+            asyncio.create_task(set_stop())
+            result = await runner.run(stop_event=stop)
+            self.assertEqual(result, "stopped")
+
+            # Non-persistent tasks should have been cancelled (pending cleared)
+            state = self.env._goal_handler_state
+            self.assertEqual(len(state.pending), 0)
+
+            # Persistent task should still be alive
+            alive = any(
+                not t.done() for t in runner._persistent_tasks.values())
+            self.assertTrue(alive)
+
+            await runner.close()
+
+        asyncio.run(drive())
+
+
+# ---------------------------------------------------------------------------
+# AsyncRunner persistent error propagation tests
+# ---------------------------------------------------------------------------
+
+@unittest.skipUnless(CLIPS_70, "CLIPS 7.0+ required")
+class TestAsyncRunnerPersistentError(unittest.TestCase):
+    def setUp(self):
+        self.env = Environment()
+
+    def test_persistent_error_propagates(self):
+        """Error in a persistent handler raises GoalHandlerError."""
+
+        class BadStream(Template):
+            code: int
+
+        class BadResult(Template):
+            tag: Symbol
+
+        class HandleBadStreamGoal(Rule):
+            goal(BadStream(code=c))
+
+        class OnBadStream(Rule):
+            bs = BadStream(code=c)
+            asserts(BadResult(tag=Symbol("bad")))
+
+        async def bad_handler(goal, env):
+            raise ValueError("persistent handler exploded")
+
+        runner = AsyncRunner(self.env)
+        self.env.define(BadStream)
+        self.env.define(BadResult)
+        self.env.define(HandleBadStreamGoal)
+        self.env.define(OnBadStream)
+        runner.register_handler(BadStream, bad_handler, persistent=True)
+        self.env.reset()
+
+        with self.assertRaises(GoalHandlerError):
+            asyncio.run(runner.run())
+
+
+# ---------------------------------------------------------------------------
+# AsyncRunner persistent re-dispatch tests
+# ---------------------------------------------------------------------------
+
+@unittest.skipUnless(CLIPS_70, "CLIPS 7.0+ required")
+class TestAsyncRunnerPersistentRedispatch(unittest.TestCase):
+    def setUp(self):
+        self.env = Environment()
+
+    def test_redispatch_after_completion(self):
+        """A persistent handler that completes quickly is re-dispatched on
+        subsequent goals."""
+
+        class QuickJob(Template):
+            tag: Symbol
+
+        class QuickJobResult(Template):
+            tag: Symbol
+
+        class HandleQuickJobGoal(Rule):
+            goal(QuickJob(tag=t))
+
+        # Consuming rule: needs QuickJob fact
+        class OnQuickJob(Rule):
+            qj = QuickJob(tag=t)
+            asserts(QuickJobResult(tag=t))
+
+        call_count = []
+
+        async def quick_handler(goal, env):
+            call_count.append(1)
+            await asyncio.sleep(0.01)
+            QuickJob(__env__=env, tag=Symbol("done"))
+
+        runner = AsyncRunner(self.env)
+        self.env.define(QuickJob)
+        self.env.define(QuickJobResult)
+        self.env.define(HandleQuickJobGoal)
+        self.env.define(OnQuickJob)
+        runner.register_handler(QuickJob, quick_handler, persistent=True)
+        self.env.reset()
+
+        result = asyncio.run(runner.run())
+        self.assertEqual(result, "completed")
+        # Handler should have been dispatched at least once
+        self.assertGreater(len(call_count), 0)
+
+
+# ---------------------------------------------------------------------------
+# Deprecation warning tests
+# ---------------------------------------------------------------------------
+
+@unittest.skipUnless(CLIPS_70, "CLIPS 7.0+ required")
+class TestAsyncRunnerDeprecation(unittest.TestCase):
+    def setUp(self):
+        self.env = Environment()
+
+    def test_async_run_emits_deprecation(self):
+        """async_run() emits DeprecationWarning."""
+        from clipspyx.async_goals import async_run, enable_goal_handlers
+        enable_goal_handlers(self.env)
+        self.env.reset()
+
+        async def drive():
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                await async_run(self.env)
+                self.assertTrue(
+                    any(issubclass(x.category, DeprecationWarning) for x in w),
+                    "async_run() should emit DeprecationWarning")
+
+        asyncio.run(drive())
+
+    def test_env_async_run_emits_deprecation(self):
+        """env.async_run() emits DeprecationWarning."""
+        from clipspyx.async_goals import enable_goal_handlers
+        enable_goal_handlers(self.env)
+        self.env.reset()
+
+        async def drive():
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                await self.env.async_run()
+                self.assertTrue(
+                    any(issubclass(x.category, DeprecationWarning) for x in w),
+                    "env.async_run() should emit DeprecationWarning")
+
+        asyncio.run(drive())
 
 
 if __name__ == '__main__':

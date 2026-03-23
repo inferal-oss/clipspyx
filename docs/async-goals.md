@@ -28,7 +28,7 @@ Rule needs (timer-event ...) fact
 import asyncio
 from clipspyx import Environment, Symbol
 from clipspyx.dsl import Template, Rule, TimerEvent
-from clipspyx.async_goals import enable_goal_handlers
+from clipspyx.async_goals import AsyncRunner
 
 class Ticket(Template):
     id: Symbol
@@ -50,7 +50,6 @@ class EscalateStale(Rule):
         print(f"Escalating ticket {self.tid}")
 
 env = Environment()
-enable_goal_handlers(env)
 env.define(Ticket)
 env.define(HandleTimerGoal)
 env.define(EscalateStale)
@@ -59,28 +58,99 @@ env.reset()
 # Assert a ticket - CLIPS generates a timer goal
 Ticket(__env__=env, id=Symbol("T-1"), status=Symbol("open"))
 
-# Run with async loop - fires after 300 seconds
-asyncio.run(env.async_run())
+# Run with async context manager - fires after 300 seconds
+async def main():
+    async with AsyncRunner(env) as runner:
+        result = await runner.run()
+        print(f"Finished: {result}")
+
+asyncio.run(main())
 ```
 
-## Setup
+## AsyncRunner
+
+`AsyncRunner` is the primary API for running async goal handlers. It wraps the
+environment in a resource context that manages handler registration, task
+lifecycle, and cleanup.
+
+### Context manager pattern
+
+Use `async with` to ensure proper setup and teardown. The constructor
+auto-enables goal handlers on the environment if they are not already enabled.
+On exit, all pending tasks are cancelled and goal handlers are disabled.
 
 ```python
-from clipspyx.async_goals import enable_goal_handlers
+from clipspyx.async_goals import AsyncRunner
 
-env = Environment()
-enable_goal_handlers(env)  # registers timer-event template + built-in handler
+async with AsyncRunner(env) as runner:
+    result = await runner.run()
 ```
 
-`enable_goal_handlers` builds the `timer-event` deftemplate and registers the
-built-in timer handler. Call it before defining rules that use `TimerEvent`.
-
-## The async run loop
+You can also manage the lifecycle manually:
 
 ```python
-await env.async_run()           # run until no goals and no pending handlers
-await env.async_run(limit=10)   # pass limit to each env.run() call
-await env.async_run(max_cycles=5)  # stop after N dispatch cycles
+runner = AsyncRunner(env)
+await runner.__aenter__()
+try:
+    result = await runner.run()
+finally:
+    await runner.close()
+```
+
+### Registering handlers
+
+Register async handlers for any template. This replaces calling
+`env.register_goal_handler` directly:
+
+```python
+async with AsyncRunner(env) as runner:
+    runner.register_handler(FetchRequest, fetch_handler)
+    result = await runner.run()
+```
+
+The built-in timer handler is registered automatically when goal handlers are
+enabled.
+
+### Persistent handlers
+
+By default, a handler's task is cancelled when the run loop exits (due to a
+stop event, max cycles, or halt). A persistent handler survives stop events and
+stays alive across multiple `run()` calls. Use this for long-lived background
+operations that should keep running while the main loop restarts.
+
+```python
+async def monitor_handler(goal, env):
+    """Long-lived handler that polls an external service."""
+    url = str(goal['url'])
+    while True:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(url)
+        MonitorResult(__env__=env, url=url, status=resp.status_code)
+        await asyncio.sleep(30)
+
+async with AsyncRunner(env) as runner:
+    runner.register_handler(MonitorRequest, monitor_handler, persistent=True)
+
+    work_ready = asyncio.Event()
+    done = False
+    while not done:
+        work_ready.clear()
+        result = await runner.run(stop_event=work_ready)
+        # Persistent handler tasks survive the stop_event.
+        # Process results, then loop to run() again.
+        done = check_if_finished(env)
+```
+
+Persistent tasks are only cancelled when the runner is closed (either by
+exiting the `async with` block or calling `runner.close()` explicitly).
+
+### Running the loop
+
+```python
+await runner.run()                  # run until no goals and no pending handlers
+await runner.run(limit=10)          # pass limit to each env.run() call
+await runner.run(max_cycles=5)      # stop after N dispatch cycles
+await runner.run(stop_event=evt)    # stop when the event is set
 ```
 
 Each cycle:
@@ -92,8 +162,8 @@ Each cycle:
 5. Wait for at least one task to complete
 6. Loop
 
-Returns when no goals remain and no handlers are pending, or when `max_cycles`
-is reached.
+Returns when no goals remain and no handlers are pending, when `max_cycles`
+is reached, when `halt_async()` is called, or when `stop_event` is set.
 
 ## TimerEvent template
 
@@ -108,8 +178,8 @@ Slots:
 
 | Slot | Type | Default | Description |
 |------|------|---------|-------------|
-| `kind` | SYMBOL | — | `after`, `at`, or `every` |
-| `name` | SYMBOL | — | Timer identity (for deduplication) |
+| `kind` | SYMBOL | (required) | `after`, `at`, or `every` |
+| `name` | SYMBOL | (required) | Timer identity (for deduplication) |
 | `seconds` | FLOAT | 0.0 | Duration for `after`/`every` |
 | `time` | FLOAT | 0.0 | Unix epoch for `at` |
 | `count` | INTEGER | 0 | Firing count (increments for `every`) |
@@ -219,18 +289,21 @@ async def fetch_handler(goal, env):
 
 env.define(FetchRequest)
 env.define(FetchResponse)
-env.register_goal_handler(FetchRequest, fetch_handler)
+
+async with AsyncRunner(env) as runner:
+    runner.register_handler(FetchRequest, fetch_handler)
+    result = await runner.run()
 ```
 
-`register_goal_handler` accepts a DSL Template class or a CLIPS template name
+`register_handler` accepts a DSL Template class or a CLIPS template name
 string:
 
 ```python
 # With DSL Template class (preferred)
-env.register_goal_handler(FetchRequest, fetch_handler)
+runner.register_handler(FetchRequest, fetch_handler)
 
 # With string (for raw deftemplates)
-env.register_goal_handler('fetch-request', fetch_handler)
+runner.register_handler('fetch-request', fetch_handler)
 ```
 
 Handler signature:
@@ -276,7 +349,7 @@ class StopAfter5(Rule):
 
 When `StopAfter5` fires, it retracts `(Active)`. The `Heartbeat` rule's LHS
 is no longer satisfied, CLIPS retracts the timer-event goal, the async loop
-cancels the pending sleep, and `async_run()` returns.
+cancels the pending sleep, and `runner.run()` returns.
 
 This pattern works for any goal type, not just timers. The controlling fact
 acts as an on/off switch for the entire goal chain.
@@ -295,20 +368,22 @@ class StopOnError(Rule):
 ```
 
 **External (from Python):** Pass an `asyncio.Event` as `stop_event`. When set,
-the loop exits cleanly, cancelling all pending handlers:
+the loop exits cleanly, cancelling all non-persistent pending handlers:
 
 ```python
 stop = asyncio.Event()
-task = asyncio.create_task(env.async_run(stop_event=stop))
 
-# Later, from external code:
-stop.set()
-reason = await task  # "stopped"
+async with AsyncRunner(env) as runner:
+    task = asyncio.create_task(runner.run(stop_event=stop))
+
+    # Later, from external code:
+    stop.set()
+    reason = await task  # "stopped"
 ```
 
 ### Return values
 
-`async_run()` returns a string indicating why the loop stopped:
+`runner.run()` returns a string indicating why the loop stopped:
 
 | Return value | Meaning |
 |-------------|---------|
@@ -322,30 +397,59 @@ reason = await task  # "stopped"
 Handler exceptions are wrapped in `GoalHandlerError`:
 
 ```python
-from clipspyx.async_goals import GoalHandlerError
+from clipspyx.async_goals import AsyncRunner, GoalHandlerError
 
 try:
-    asyncio.run(env.async_run())
+    async with AsyncRunner(env) as runner:
+        await runner.run()
 except GoalHandlerError as e:
     print(f"Handler failed: {e.__cause__}")
 ```
 
-## Disabling
+## Legacy API (deprecated)
+
+The `enable_goal_handlers` + `async_run` pattern still works but is deprecated.
+Prefer `AsyncRunner`, which handles setup, teardown, and persistent handlers
+automatically.
+
+> **Deprecation notice:** `enable_goal_handlers`, `disable_goal_handlers`, and
+> `env.async_run()` will be removed in a future release. Migrate to
+> `AsyncRunner` for new code.
 
 ```python
-from clipspyx.async_goals import disable_goal_handlers
+from clipspyx.async_goals import enable_goal_handlers, disable_goal_handlers
 
+env = Environment()
+enable_goal_handlers(env)  # registers timer-event template + built-in handler
+
+# Register handlers directly on the environment
+env.register_goal_handler(FetchRequest, fetch_handler)
+
+# Run the loop
+await env.async_run()
+await env.async_run(limit=10)
+await env.async_run(max_cycles=5)
+await env.async_run(stop_event=stop)
+
+# Disable when done
 disable_goal_handlers(env)  # cancels pending tasks, clears state
 ```
 
 ## API reference
 
-| Function | Description |
-|----------|-------------|
+| Class | Description |
+|-------|-------------|
+| `AsyncRunner(env)` | Async context manager for running goal handlers. Auto-enables goal handlers if not already enabled. |
+| `AsyncRunner.register_handler(template, handler, persistent=False)` | Register an async handler. Set `persistent=True` for tasks that survive stop events. |
+| `AsyncRunner.run(limit, max_cycles, stop_event)` | Run the async event loop. Returns `"completed"`, `"max_cycles"`, `"halted"`, or `"stopped"`. |
+| `AsyncRunner.close()` | Cancel all tasks and disable goal handlers. Called automatically on context manager exit. |
+
+| Function (legacy) | Description |
+|--------------------|-------------|
 | `enable_goal_handlers(env)` | Register timer-event template and built-in handler |
 | `disable_goal_handlers(env)` | Cancel pending tasks and clear state |
 | `env.register_goal_handler(template, handler)` | Register async handler (template class or string) |
-| `async_run(env, limit, max_cycles, stop_event)` | Run the async event loop |
+| `env.async_run(limit, max_cycles, stop_event)` | Run the async event loop |
 | `env.halt_async()` | Signal the run loop to stop after the current cycle |
 
 | Class/Constant | Description |

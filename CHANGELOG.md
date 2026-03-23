@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- `AsyncRunner` class: resource context for async goal handling with persistent
+  handler support; manages full lifecycle (enable/disable) and survives handlers
+  across `run()` invocations via `persistent=True`
+
+### Deprecated
+- `async_run()` function and `env.async_run()` method: use `AsyncRunner` instead
+
 ## [0.6.1] - 2026-03-22
 
 ### Fixed
