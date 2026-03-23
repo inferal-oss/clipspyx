@@ -503,7 +503,8 @@ def _atom_to_clips(node, bound_vars) -> str:
     if isinstance(node, cst.Float):
         return node.value
     if isinstance(node, (cst.SimpleString, cst.FormattedString, cst.ConcatenatedString)):
-        return f'"{_extract_string(node)}"'
+        from clipspyx.dsl.ir import _clips_escape_str
+        return f'"{_clips_escape_str(_extract_string(node))}"'
     if isinstance(node, cst.UnaryOperation) and isinstance(node.operator, cst.Minus):
         inner = node.expression
         if isinstance(inner, cst.Integer):

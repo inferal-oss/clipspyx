@@ -13,6 +13,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   batch), the concurrent rule incorrectly received salience 0 instead of
   matching its target; caused rules to fire out of order in pipelines with 3+
   ordering levels
+- String literals containing double quotes in `asserts()`/`modifies()` effects
+  and `Literal` pattern slots now escape embedded `"` as `\"` for CLIPS;
+  previously, strings like `'{"key": "val"}'` caused TMPLTDEF2 parse errors
 
 ## [0.6.0] - 2026-03-22
 

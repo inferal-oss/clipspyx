@@ -3,6 +3,11 @@ from dataclasses import dataclass, field
 from clipspyx.values import Symbol
 
 
+def _clips_escape_str(s: str) -> str:
+    """Escape a Python string for embedding in a CLIPS double-quoted string."""
+    return s.replace('\\', '\\\\').replace('"', '\\"')
+
+
 # --- Template IR ---
 
 @dataclass
@@ -63,7 +68,7 @@ class Literal:
         if isinstance(self.value, Symbol):
             return str(self.value)
         if isinstance(self.value, str):
-            return f'"{self.value}"'
+            return f'"{_clips_escape_str(self.value)}"'
         return str(self.value)
 
 

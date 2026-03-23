@@ -1958,6 +1958,27 @@ class TestEffectEndToEnd(unittest.TestCase):
         self.assertGreaterEqual(len(facts), 1)
         self.assertEqual(facts[0]['msg'], 'hello world')
 
+    def test_assert_effect_with_embedded_quotes(self):
+        """String literals containing double quotes must be escaped for CLIPS.
+
+        Without escaping, a string like '{"key": "val"}' generates
+        (assert (Result (msg "{"key": "val"}"))) which CLIPS rejects as
+        a multi-field value in a single-field slot (TMPLTDEF2 error).
+        """
+        class MakeJson(Rule):
+            asserts(Result(msg='{"status": "ok"}'))
+
+        env = Environment()
+        env.define(Result)
+        env.define(MakeJson)
+        env.reset()
+        env.run()
+
+        tpl = env.find_template(Result.__clipspyx_dsl__.name)
+        facts = list(tpl.facts())
+        self.assertGreaterEqual(len(facts), 1)
+        self.assertEqual(facts[0]['msg'], '{"status": "ok"}')
+
 
 # =============================================================================
 # Ordering declaration tests
