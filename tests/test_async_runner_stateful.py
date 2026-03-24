@@ -412,13 +412,14 @@ class AsyncRunnerStateMachine(RuleBasedStateMachine):
 
 # -- Test configuration --
 
-AsyncRunnerTest = AsyncRunnerStateMachine.TestCase
-AsyncRunnerTest.settings = settings(
-    max_examples=200,
-    stateful_step_count=30,
-    deadline=15000,
-    suppress_health_check=[HealthCheck.too_slow],
-)
+if CLIPS_70:
+    AsyncRunnerTest = AsyncRunnerStateMachine.TestCase
+    AsyncRunnerTest.settings = settings(
+        max_examples=200,
+        stateful_step_count=30,
+        deadline=15000,
+        suppress_health_check=[HealthCheck.too_slow],
+    )
 
 
 if __name__ == '__main__':
