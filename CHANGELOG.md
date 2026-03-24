@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-03-24
 ### Added
 - Bound assert effects in DSL: `a = asserts(T(...))` captures the CLIPS fact
   address via `(bind ?a (assert ...))`, usable as slot values in subsequent
@@ -172,7 +173,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `git apply` patch failure on Windows due to CRLF corruption ([989e154](https://github.com/inferal-oss/clipspyx/commit/989e154), [f95829d](https://github.com/inferal-oss/clipspyx/commit/f95829d))
 - Linux wheels rejected by PyPI due to `linux_x86_64` platform tag ([233faa3](https://github.com/inferal-oss/clipspyx/commit/233faa3))
 
-[Unreleased]: https://github.com/inferal-oss/clipspyx/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/inferal-oss/clipspyx/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/inferal-oss/clipspyx/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/inferal-oss/clipspyx/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/inferal-oss/clipspyx/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/inferal-oss/clipspyx/compare/v0.6.1...v0.7.0
