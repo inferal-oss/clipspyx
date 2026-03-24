@@ -127,14 +127,25 @@ def clips_external_address(env: ffi.CData, value: type) -> ffi.CData:
 
 
 def python_external_address(env: ffi.CData, value: ffi.CData) -> type:
-    """Convert a CLIPSExternalAddress into a Python object."""
-    obj = ffi.from_handle(value.externalAddressValue.contents)
+    """Convert a CLIPSExternalAddress into a Python object.
 
-    # Remove reference to CData handle
+    Non-destructive: the handle stays alive in external_addresses so the
+    same slot can be read multiple times (by rules, Python code, etc.).
+    Use :func:`consume_external_address` to release the handle when the
+    value is no longer needed (e.g. after a function call completes).
+    """
+    return ffi.from_handle(value.externalAddressValue.contents)
+
+
+def consume_external_address(env: ffi.CData, value: ffi.CData):
+    """Release the handle for an external address after consumption.
+
+    Call this when a CLIPS external address has been read and the
+    underlying handle is no longer needed (e.g. function call arguments).
+    """
     user_functions = common.environment_data(env, 'user_functions')
-    del user_functions.external_addresses[value.externalAddressValue.contents]
-
-    return obj
+    user_functions.external_addresses.pop(
+        value.externalAddressValue.contents, None)
 
 
 PYTHON_VALUES = {common.CLIPSType.FLOAT:

@@ -110,6 +110,50 @@ Useful when integrating with existing CLIPS code that expects specific names.
 | `float` | `FLOAT` |
 | `Symbol` | `SYMBOL` |
 | `Multi[T]` | multislot of type `T` |
+| `list[T]` | multislot of type `T` (equivalent to `Multi[T]`) |
+| `object` | untyped slot (external address) |
+| Custom class | untyped slot (external address) |
+
+### Python object slots
+
+A slot can hold arbitrary Python objects by annotating it with `object` or any
+custom class. The DSL generates an untyped CLIPS slot, and values are stored as
+CLIPS external addresses (opaque pointers back to the Python object).
+
+```python
+class HttpRequest:
+    def __init__(self, method, url):
+        self.method = method
+        self.url = url
+
+class PendingRequest(Template):
+    request: HttpRequest
+
+class RequestDone(Template):
+    request: HttpRequest
+```
+
+Objects round-trip through CLIPS: you get back the same Python object (identity
+preserved). Rules can bind object slots to variables and pass them through
+declarative effects:
+
+```python
+class ForwardRequest(Rule):
+    p = PendingRequest(request=r)
+    asserts(RequestDone(request=r))
+```
+
+For multislots, use `list[T]` or `Multi[T]`:
+
+```python
+class Batch(Template):
+    tasks: list[Task]     # multislot of Task objects
+```
+
+Both hashable and unhashable objects (dicts, lists) work. The only constraint
+is that CLIPS cannot pattern-match on the object's contents: you can bind the
+slot to a variable but cannot use field constraints like `request=not None` on
+external address values.
 
 ### Typed fact-address slots
 

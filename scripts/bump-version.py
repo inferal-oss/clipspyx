@@ -16,7 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 VERSION_FILES = [
-    # (path relative to ROOT, pattern, replacement template)
+    # (path relative to ROOT, pattern)
     ("pyproject.toml", re.compile(r'^(version\s*=\s*")([^"]+)(")', re.MULTILINE)),
     ("clipspyx/__init__.py", re.compile(r"^(__version__\s*=\s*')([^']+)(')", re.MULTILINE)),
     ("backends/ffi/pyproject.toml", re.compile(r'^(version\s*=\s*")([^"]+)(")', re.MULTILINE)),
@@ -26,6 +26,10 @@ VERSION_FILES = [
 
 CHANGELOG = "CHANGELOG.md"
 UNRELEASED_RE = re.compile(r"^(## \[Unreleased\])\s*$", re.MULTILINE)
+VERSION_HEADING_RE = re.compile(r"^## \[(\d+\.\d+\.\d+)\]", re.MULTILINE)
+LINK_SECTION_RE = re.compile(
+    r"^\[Unreleased\]:.*(?:\n\[[\d.]+\]:.*)*\n?$", re.MULTILINE)
+REPO_URL_RE = re.compile(r"\[Unreleased\]:\s*(https://[^/]+/[^/]+/[^/]+)/compare/")
 
 
 def bump_version_files(new_version: str, dry_run: bool) -> list[tuple[str, str, str]]:
@@ -52,28 +56,69 @@ def bump_version_files(new_version: str, dry_run: bool) -> list[tuple[str, str, 
     return changes
 
 
-def bump_changelog(new_version: str, dry_run: bool) -> bool:
+def read_changelog() -> str | None:
+    """Read changelog text, or None if missing."""
+    path = ROOT / CHANGELOG
+    if path.exists():
+        return path.read_text()
+    return None
+
+
+def write_changelog(text: str):
+    """Write changelog text to disk."""
+    (ROOT / CHANGELOG).write_text(text)
+
+
+def stamp_unreleased(text: str, new_version: str) -> str | None:
     """Stamp [Unreleased] as [new_version] with today's date.
 
-    Inserts a fresh [Unreleased] heading above the new version.
-    Returns True if the changelog was modified.
+    Returns the modified text, or None if no change was needed.
     """
-    path = ROOT / CHANGELOG
-    if not path.exists():
-        print(f"  SKIP {CHANGELOG} (not found)", file=sys.stderr)
-        return False
-    text = path.read_text()
     if not UNRELEASED_RE.search(text):
-        print(f"  SKIP {CHANGELOG} (no [Unreleased] section)")
-        return False
+        print(f"  SKIP {CHANGELOG} heading (no [Unreleased] section)")
+        return None
+    if re.search(rf"^## \[{re.escape(new_version)}\]", text, re.MULTILINE):
+        print(f"  SKIP {CHANGELOG} heading (v{new_version} already exists)")
+        return None
     today = date.today().isoformat()
     replacement = f"## [Unreleased]\n\n## [{new_version}] - {today}"
     new_text = UNRELEASED_RE.sub(replacement, text)
+    return new_text if new_text != text else None
+
+
+def regenerate_links(text: str) -> tuple[str | None, int]:
+    """Regenerate the reference links at the bottom of the changelog.
+
+    Returns (modified_text, link_count) or (None, 0) if unchanged.
+    """
+    m = REPO_URL_RE.search(text)
+    if not m:
+        print(f"  SKIP {CHANGELOG} links (no repo URL found)", file=sys.stderr)
+        return None, 0
+    repo_url = m.group(1)
+
+    versions = VERSION_HEADING_RE.findall(text)
+    if not versions:
+        return None, 0
+
+    lines = [f"[Unreleased]: {repo_url}/compare/v{versions[0]}...HEAD"]
+    for i, version in enumerate(versions):
+        if i + 1 < len(versions):
+            prev = versions[i + 1]
+            lines.append(f"[{version}]: {repo_url}/compare/v{prev}...v{version}")
+        else:
+            lines.append(f"[{version}]: {repo_url}/commits/v{version}")
+
+    new_links = "\n".join(lines) + "\n"
+
+    if LINK_SECTION_RE.search(text):
+        new_text = LINK_SECTION_RE.sub(new_links, text)
+    else:
+        new_text = text.rstrip() + "\n\n" + new_links
+
     if new_text == text:
-        return False
-    if not dry_run:
-        path.write_text(new_text)
-    return True
+        return None, 0
+    return new_text, len(lines)
 
 
 def main():
@@ -87,20 +132,38 @@ def main():
         parser.error(f"Invalid version format: {version!r} (expected X.Y.Z)")
 
     label = "[dry run] " if args.dry_run else ""
-
     print(f"{label}Bumping to {version}\n")
 
     changes = bump_version_files(version, args.dry_run)
     for relpath, old, new in changes:
         print(f"  {relpath}: {old} -> {new}")
 
-    if bump_changelog(version, args.dry_run):
-        print(f"  {CHANGELOG}: [Unreleased] -> [{version}] - {date.today().isoformat()}")
+    # Changelog: work on in-memory text so stamp + links are consistent
+    changelog_text = read_changelog()
+    changelog_changed = False
+    n_links = 0
 
-    if not changes:
-        print("\nNo version files changed.")
+    if changelog_text is not None:
+        stamped = stamp_unreleased(changelog_text, version)
+        if stamped is not None:
+            changelog_text = stamped
+            changelog_changed = True
+            print(f"  {CHANGELOG}: [Unreleased] -> [{version}] - {date.today().isoformat()}")
+
+        linked, n_links = regenerate_links(changelog_text)
+        if linked is not None:
+            changelog_text = linked
+            changelog_changed = True
+            print(f"  {CHANGELOG}: regenerated {n_links} release links")
+
+        if changelog_changed and not args.dry_run:
+            write_changelog(changelog_text)
+
+    if not changes and not changelog_changed:
+        print("\nNothing to do.")
     else:
-        print(f"\n{label}Updated {len(changes)} file(s).")
+        total = len(changes) + (1 if changelog_changed else 0)
+        print(f"\n{label}Updated {total} file(s).")
 
 
 if __name__ == "__main__":

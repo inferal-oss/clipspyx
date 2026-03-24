@@ -42,7 +42,7 @@ from typing import Union
 import clipspyx
 
 from clipspyx.modules import Module
-from clipspyx.common import CLIPSError, environment_builder, environment_data
+from clipspyx.common import CLIPSError, CLIPSType, environment_builder, environment_data
 
 from clipspyx._clipspyx import lib, ffi
 
@@ -448,6 +448,7 @@ class Functions:
 @ffi.def_extern()
 def python_function(env: ffi.CData, context: ffi.CData, output: ffi.CData):
     arguments = []
+    ext_addr_handles = []
     value = clipspyx.values.clips_udf_value(env)
 
     if lib.UDFFirstArgument(context, lib.SYMBOL_BIT, value):
@@ -459,6 +460,8 @@ def python_function(env: ffi.CData, context: ffi.CData, output: ffi.CData):
     while lib.UDFHasNextArgument(context):
         if lib.UDFNextArgument(context, clipspyx.values.ANY_TYPE_BITS, value):
             arguments.append(clipspyx.values.python_value(env, value))
+            if value.header.type == CLIPSType.EXTERNAL_ADDRESS:
+                ext_addr_handles.append(value.externalAddressValue.contents)
         else:
             lib.UDFThrowError(context)
             return
@@ -476,6 +479,11 @@ def python_function(env: ffi.CData, context: ffi.CData, output: ffi.CData):
         lib.UDFThrowError(context)
     else:
         clipspyx.values.clips_udf_value(env, ret, output)
+    finally:
+        if ext_addr_handles:
+            ea = user_functions.external_addresses
+            for handle in ext_addr_handles:
+                ea.pop(handle, None)
 
 
 DEFFUNCTION = """

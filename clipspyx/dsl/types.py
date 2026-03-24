@@ -1,3 +1,5 @@
+import types
+
 from clipspyx.values import Symbol
 
 
@@ -15,7 +17,9 @@ class Multi:
 
 
 def is_multi(annotation) -> bool:
-    """Check if an annotation is a Multi[T] type."""
+    """Check if an annotation is a Multi[T] or list[T] type."""
+    if isinstance(annotation, types.GenericAlias):
+        return annotation.__origin__ is list
     try:
         return (isinstance(annotation, type)
                 and issubclass(annotation, Multi))
@@ -24,7 +28,10 @@ def is_multi(annotation) -> bool:
 
 
 def multi_element_type(annotation):
-    """Extract the element type from a Multi[T] annotation."""
+    """Extract the element type from a Multi[T] or list[T] annotation."""
+    if isinstance(annotation, types.GenericAlias):
+        args = annotation.__args__
+        return args[0] if args else None
     return annotation.__element_type__
 
 

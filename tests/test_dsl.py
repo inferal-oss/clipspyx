@@ -2790,5 +2790,291 @@ class TestMinMaxPow(unittest.TestCase):
         self.assertIn('(** ?v 3)', str(rule))
 
 
+# =============================================================================
+# External address (arbitrary Python object) slots
+# =============================================================================
+
+class TestExternalAddressSlots(unittest.TestCase):
+    """Arbitrary Python objects stored via CLIPS EXTERNAL_ADDRESS."""
+
+    def setUp(self):
+        self.env = Environment()
+
+    def test_object_type_annotation_ir(self):
+        """object annotation produces an untyped slot (clips_type=None)."""
+        class ExtIRObj(Template):
+            payload: object
+
+        slot = ExtIRObj.__clipspyx_dsl__.slots[0]
+        self.assertEqual(slot.name, 'payload')
+        self.assertIsNone(slot.clips_type)
+
+    def test_custom_class_annotation_ir(self):
+        """Custom class annotation produces an untyped slot."""
+        class MyData:
+            pass
+
+        class ExtIRCls(Template):
+            data: MyData
+
+        slot = ExtIRCls.__clipspyx_dsl__.slots[0]
+        self.assertIsNone(slot.clips_type)
+
+    def test_assert_and_retrieve_dict(self):
+        """Unhashable dict round-trips through a template slot."""
+        class ExtDict(Template):
+            payload: object
+
+        self.env.define(ExtDict)
+        self.env.reset()
+
+        obj = {'key': 'value', 'nested': [1, 2]}
+        ExtDict(__env__=self.env, payload=obj)
+
+        tpl = self.env.find_template(ExtDict.__clipspyx_dsl__.name)
+        facts = list(tpl.facts())
+        self.assertEqual(len(facts), 1)
+        self.assertIs(facts[0]['payload'], obj)
+
+    def test_assert_and_retrieve_custom_object(self):
+        """Custom class instance round-trips through a template slot."""
+        class Ctx:
+            def __init__(self, x):
+                self.x = x
+
+        class ExtCustom(Template):
+            ctx: object
+
+        self.env.define(ExtCustom)
+        self.env.reset()
+
+        obj = Ctx(42)
+        ExtCustom(__env__=self.env, ctx=obj)
+
+        tpl = self.env.find_template(ExtCustom.__clipspyx_dsl__.name)
+        facts = list(tpl.facts())
+        self.assertIs(facts[0]['ctx'], obj)
+        self.assertEqual(facts[0]['ctx'].x, 42)  # second read of same slot
+
+    def test_rule_passthrough(self):
+        """Rule binds an external-address slot and passes it to an effect."""
+        class ExtInput(Template):
+            payload: object
+
+        class ExtOutput(Template):
+            payload: object
+
+        class ExtForward(Rule):
+            inp = ExtInput(payload=p)
+            asserts(ExtOutput(payload=p))
+
+        self.env.define(ExtInput)
+        self.env.define(ExtOutput)
+        self.env.define(ExtForward)
+        self.env.reset()
+
+        obj = {'hello': 'world'}
+        ExtInput(__env__=self.env, payload=obj)
+        self.env.run()
+
+        tpl = self.env.find_template(ExtOutput.__clipspyx_dsl__.name)
+        facts = list(tpl.facts())
+        self.assertEqual(len(facts), 1)
+        self.assertIs(facts[0]['payload'], obj)
+
+    def test_mixed_typed_and_object_slots(self):
+        """Template with Symbol and object slots in one rule."""
+        class ExtRequest(Template):
+            tag: Symbol
+            ctx: object
+
+        class ExtResponse(Template):
+            tag: Symbol
+            ctx: object
+
+        class ExtHandle(Rule):
+            r = ExtRequest(tag=t, ctx=c)
+            asserts(ExtResponse(tag=t, ctx=c))
+
+        self.env.define(ExtRequest)
+        self.env.define(ExtResponse)
+        self.env.define(ExtHandle)
+        self.env.reset()
+
+        obj = {'data': [1, 2, 3]}
+        ExtRequest(__env__=self.env, tag=Symbol("go"), ctx=obj)
+        self.env.run()
+
+        tpl = self.env.find_template(ExtResponse.__clipspyx_dsl__.name)
+        facts = list(tpl.facts())
+        self.assertEqual(len(facts), 1)
+        self.assertEqual(str(facts[0]['tag']), 'go')
+        self.assertIs(facts[0]['ctx'], obj)
+
+    def test_multiple_object_facts(self):
+        """Multiple facts with distinct Python objects stay separate."""
+        class ExtItem(Template):
+            data: object
+
+        class ExtResult(Template):
+            data: object
+
+        class ExtCopy(Rule):
+            i = ExtItem(data=d)
+            asserts(ExtResult(data=d))
+
+        self.env.define(ExtItem)
+        self.env.define(ExtResult)
+        self.env.define(ExtCopy)
+        self.env.reset()
+
+        objs = [{'id': 1}, {'id': 2}, {'id': 3}]
+        for o in objs:
+            ExtItem(__env__=self.env, data=o)
+        self.env.run()
+
+        tpl = self.env.find_template(ExtResult.__clipspyx_dsl__.name)
+        results = [f['data'] for f in tpl.facts()]
+        self.assertEqual(len(results), 3)
+        for o in objs:
+            self.assertIn(o, results)
+
+
+    def test_named_type_slot_with_rule(self):
+        """Template slot annotated with a custom class, used in a rule."""
+        class HttpRequest:
+            def __init__(self, method, url):
+                self.method = method
+                self.url = url
+
+        class ExtGoal(Template):
+            request: HttpRequest
+
+        class ExtDone(Template):
+            url: str
+
+        class ExtProcess(Rule):
+            g = ExtGoal(request=r)
+            asserts(ExtDone(url="handled"))
+
+        self.env.define(ExtGoal)
+        self.env.define(ExtDone)
+        self.env.define(ExtProcess)
+        self.env.reset()
+
+        req = HttpRequest("GET", "/api/data")
+        ExtGoal(__env__=self.env, request=req)
+        self.env.run()
+
+        # Verify the object survives in the fact slot
+        goal_tpl = self.env.find_template(ExtGoal.__clipspyx_dsl__.name)
+        goal_facts = list(goal_tpl.facts())
+        self.assertEqual(len(goal_facts), 1)
+        stored = goal_facts[0]['request']
+        self.assertIs(stored, req)
+        self.assertEqual(stored.method, "GET")
+        self.assertEqual(stored.url, "/api/data")
+
+        # Verify the rule fired
+        done_tpl = self.env.find_template(ExtDone.__clipspyx_dsl__.name)
+        done_facts = list(done_tpl.facts())
+        self.assertEqual(len(done_facts), 1)
+
+
+    def test_multislot_of_named_type(self):
+        """Multi[CustomClass] slot stores and retrieves a list of objects."""
+        from clipspyx.dsl import Multi
+
+        class Task:
+            def __init__(self, name, priority):
+                self.name = name
+                self.priority = priority
+
+        class ExtBatch(Template):
+            tasks: Multi[Task]
+
+        class ExtSummary(Template):
+            tasks: Multi[Task]
+
+        class ExtCopyBatch(Rule):
+            b = ExtBatch(tasks=(*ts,))
+            asserts(ExtSummary(tasks=ts))
+
+        self.env.define(ExtBatch)
+        self.env.define(ExtSummary)
+        self.env.define(ExtCopyBatch)
+        self.env.reset()
+
+        t1 = Task("build", 1)
+        t2 = Task("test", 2)
+        t3 = Task("deploy", 3)
+        ExtBatch(__env__=self.env, tasks=[t1, t2, t3])
+        self.env.run()
+
+        # Verify objects round-trip through multislot
+        batch_tpl = self.env.find_template(ExtBatch.__clipspyx_dsl__.name)
+        batch_facts = list(batch_tpl.facts())
+        stored = batch_facts[0]['tasks']
+        self.assertEqual(len(stored), 3)
+        self.assertIs(stored[0], t1)
+        self.assertIs(stored[1], t2)
+        self.assertIs(stored[2], t3)
+
+        # Verify rule passed the multislot through
+        sum_tpl = self.env.find_template(ExtSummary.__clipspyx_dsl__.name)
+        sum_facts = list(sum_tpl.facts())
+        self.assertEqual(len(sum_facts), 1)
+        copied = sum_facts[0]['tasks']
+        self.assertEqual(len(copied), 3)
+        self.assertEqual(copied[0].name, "build")
+        self.assertEqual(copied[2].priority, 3)
+
+    def test_list_type_annotation_multislot(self):
+        """list[CustomClass] annotation works as a multislot."""
+        class Step:
+            def __init__(self, name):
+                self.name = name
+
+        class ExtPipeline(Template):
+            steps: list[Step]
+
+        class ExtPipelineResult(Template):
+            steps: list[Step]
+
+        class ExtRunPipeline(Rule):
+            p = ExtPipeline(steps=(*s,))
+            asserts(ExtPipelineResult(steps=s))
+
+        # Verify IR: list[Step] treated as multislot with no type constraint
+        slot = ExtPipeline.__clipspyx_dsl__.slots[0]
+        self.assertTrue(slot.multi)
+        self.assertIsNone(slot.clips_type)
+
+        self.env.define(ExtPipeline)
+        self.env.define(ExtPipelineResult)
+        self.env.define(ExtRunPipeline)
+        self.env.reset()
+
+        s1, s2 = Step("build"), Step("deploy")
+        ExtPipeline(__env__=self.env, steps=[s1, s2])
+        self.env.run()
+
+        # Verify objects round-trip through list[T] multislot
+        tpl = self.env.find_template(ExtPipeline.__clipspyx_dsl__.name)
+        stored = list(tpl.facts())[0]['steps']
+        self.assertEqual(len(stored), 2)
+        self.assertIs(stored[0], s1)
+        self.assertIs(stored[1], s2)
+
+        # Verify rule passed them through
+        res_tpl = self.env.find_template(ExtPipelineResult.__clipspyx_dsl__.name)
+        res_facts = list(res_tpl.facts())
+        self.assertEqual(len(res_facts), 1)
+        copied = res_facts[0]['steps']
+        self.assertEqual(len(copied), 2)
+        self.assertEqual(copied[0].name, "build")
+        self.assertEqual(copied[1].name, "deploy")
+
+
 if __name__ == '__main__':
     unittest.main()

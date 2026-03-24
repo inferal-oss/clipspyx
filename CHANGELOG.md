@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-03-23
+### Added
+- `list[T]` type annotations on DSL template slots now work as multislots,
+  equivalent to `Multi[T]`
+- `object` and custom class type annotations on DSL template slots store
+  arbitrary Python objects via CLIPS external addresses; works in templates,
+  rules, and declarative effects
+- `scripts/bump-version.py` for reliable version bumping across all packages,
+  changelog headings, and release links
+
+### Fixed
+- External address slot values can now be read multiple times; previously,
+  `python_external_address` destructively deleted the handle on first read,
+  crashing on subsequent access to the same slot
 ## [0.7.1] - 2026-03-23
 
 ### Fixed
@@ -147,7 +161,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `git apply` patch failure on Windows due to CRLF corruption ([989e154](https://github.com/inferal-oss/clipspyx/commit/989e154), [f95829d](https://github.com/inferal-oss/clipspyx/commit/f95829d))
 - Linux wheels rejected by PyPI due to `linux_x86_64` platform tag ([233faa3](https://github.com/inferal-oss/clipspyx/commit/233faa3))
 
-[Unreleased]: https://github.com/inferal-oss/clipspyx/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/inferal-oss/clipspyx/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/inferal-oss/clipspyx/compare/v0.7.1...v0.7.2
+[0.7.1]: https://github.com/inferal-oss/clipspyx/compare/v0.7.0...v0.7.1
+[0.7.0]: https://github.com/inferal-oss/clipspyx/compare/v0.6.1...v0.7.0
+[0.6.1]: https://github.com/inferal-oss/clipspyx/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/inferal-oss/clipspyx/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/inferal-oss/clipspyx/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/inferal-oss/clipspyx/compare/v0.3.0...v0.4.0
