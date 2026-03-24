@@ -447,6 +447,75 @@ cancels the pending sleep, and `runner.run()` returns.
 This pattern works for any goal type, not just timers. The controlling fact
 acts as an on/off switch for the entire goal chain.
 
+### Cancellation via negation
+
+Goals are also retracted when a negation CE in the generating rule becomes
+false. CLIPS generates a goal only while **all prior conditions** of the
+consuming rule are satisfied. Asserting a fact that falsifies a `~Fact()`
+condition is just as effective as retracting a positive one.
+
+This enables a common pattern: a rule generates a goal conditionally, and
+an external event cancels it by asserting a fact into one of the negations.
+
+```python
+class TestDecl(Template):
+    name: Symbol
+    timeout: float
+
+class RunTest(Template):
+    name: Symbol
+
+class TestPassed(Template):
+    name: Symbol
+
+class TestFailure(Template):
+    name: Symbol
+    detail: Symbol
+
+class TimeoutRule(Rule):
+    __salience__ = -9000
+    t = TestDecl(name=n, timeout=timeout)
+    rt = RunTest(name=n)
+    ~TestPassed(name=n)
+    ~TestFailure(name=n)
+    te = TimerEvent(kind=Symbol("after"), name=n, seconds=timeout)
+    asserts(TestFailure(name=n, detail=Symbol("timeout")))
+    retracts(rt)
+```
+
+While `TestDecl` and `RunTest` exist and neither `TestPassed` nor
+`TestFailure` has been asserted, CLIPS generates a timer-event goal. The
+async handler starts sleeping for `timeout` seconds.
+
+If nothing resolves the test, the timer fires, the rule asserts
+`TestFailure(detail="timeout")`, and retracts `RunTest`.
+
+If something asserts `TestPassed(name=n)` before the deadline, the
+`~TestPassed(name=n)` condition becomes false, CLIPS retracts the
+timer-event goal, the async loop cancels the sleeping handler, and the
+runner returns. No timeout failure is recorded. Use `wake()` if the
+assertion happens from external Python code rather than from a rule:
+
+```python
+async def resolve_test(env, runner, name):
+    TestPassed(__env__=env, name=Symbol(name))
+    runner.wake()  # ensure the runner notices immediately
+```
+
+The same mechanism works for any number of negation CEs. Each one is an
+independent cancellation path: asserting into any of them breaks the
+goal-generating condition and retracts the goal.
+
+**Choosing between the two cancellation styles:**
+
+| Style | Mechanism | Use when |
+|-------|-----------|----------|
+| Retract positive fact | Remove a "gate" fact | You control the lifecycle with an explicit on/off switch |
+| Assert into negation | Add a "blocker" fact | Cancellation is a side-effect of reaching a new state (e.g. test passed, task completed) |
+
+Both styles are equally reliable. CLIPS tracks all prior conditions in the
+Rete network and retracts goals whenever any of them becomes unsatisfied.
+
 ### Programmatic cancellation
 
 **Internal (from rules):** Call `halt_async()` from a rule action to stop the

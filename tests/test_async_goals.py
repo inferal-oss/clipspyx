@@ -1776,5 +1776,167 @@ class TestGoalWithNotCETimer(unittest.TestCase):
         self.assertEqual(int(logs[2]['n']), 2)
 
 
+# ---------------------------------------------------------------------------
+# Goal cancellation via negation CE tests
+# ---------------------------------------------------------------------------
+
+@unittest.skipUnless(CLIPS_70, "CLIPS 7.0+ required")
+class TestGoalCancellationViaNegation(unittest.TestCase):
+    """Prove that asserting a fact which falsifies a negation CE in the
+    goal-generating rule retracts the goal and cancels the async handler.
+
+    Models the "universal timeout" pattern: a timeout rule generates a
+    timer-event goal while the test is unresolved.  When the test passes
+    (TestPassed asserted), the negation ~TestPassed becomes false, CLIPS
+    retracts the goal, and the runner cancels the sleeping timer — returning
+    well before the timer would have expired.
+    """
+
+    def setUp(self):
+        self.env = Environment()
+        self.runner = AsyncRunner(self.env)
+
+    def test_timeout_fires_when_unresolved(self):
+        """Without external resolution the timer fires and the timeout
+        rule asserts TestFailure after the full delay."""
+
+        class TestDecl(Template):
+            name: Symbol
+            timeout: float
+
+        class RunTest(Template):
+            name: Symbol
+
+        class TestPassed(Template):
+            name: Symbol
+
+        class TestFailure(Template):
+            name: Symbol
+            detail: Symbol
+
+        class TimeoutRule(Rule):
+            __salience__ = -9000
+            t = TestDecl(name=n, timeout=timeout)
+            rt = RunTest(name=n)
+            ~TestPassed(name=n)
+            ~TestFailure(name=n)
+            te = TimerEvent(kind=Symbol("after"), name=n, seconds=timeout)
+            asserts(TestFailure(name=n, detail=Symbol("timeout")))
+            retracts(rt)
+
+        self.env.define(TestDecl)
+        self.env.define(RunTest)
+        self.env.define(TestPassed)
+        self.env.define(TestFailure)
+        self.env.define(_make_goal_handler())
+        self.env.define(TimeoutRule)
+
+        tname = TestDecl.__clipspyx_dsl__.name
+        rname = RunTest.__clipspyx_dsl__.name
+        fname = TestFailure.__clipspyx_dsl__.name
+
+        self.env.find_template(tname).assert_fact(
+            name=Symbol("t1"), timeout=0.15)
+        self.env.find_template(rname).assert_fact(name=Symbol("t1"))
+
+        async def drive():
+            start = time.monotonic()
+            await self.runner.run()
+            elapsed = time.monotonic() - start
+
+            # Timer must have actually waited
+            self.assertGreaterEqual(elapsed, 0.10)
+
+            # TestFailure asserted by the timeout rule
+            failures = list(self.env.find_template(fname).facts())
+            self.assertEqual(len(failures), 1)
+            self.assertEqual(str(failures[0]['detail']), 'timeout')
+
+            # RunTest retracted
+            remaining = list(self.env.find_template(rname).facts())
+            self.assertEqual(len(remaining), 0)
+
+            await self.runner.close()
+
+        asyncio.run(drive())
+
+    def test_early_pass_cancels_timer(self):
+        """Asserting TestPassed mid-timer retracts the goal and cancels the
+        handler — the runner returns in a fraction of the timeout duration."""
+
+        class TestDecl(Template):
+            name: Symbol
+            timeout: float
+
+        class RunTest(Template):
+            name: Symbol
+
+        class TestPassed(Template):
+            name: Symbol
+
+        class TestFailure(Template):
+            name: Symbol
+            detail: Symbol
+
+        class TimeoutRule(Rule):
+            __salience__ = -9000
+            t = TestDecl(name=n, timeout=timeout)
+            rt = RunTest(name=n)
+            ~TestPassed(name=n)
+            ~TestFailure(name=n)
+            te = TimerEvent(kind=Symbol("after"), name=n, seconds=timeout)
+            asserts(TestFailure(name=n, detail=Symbol("timeout")))
+            retracts(rt)
+
+        self.env.define(TestDecl)
+        self.env.define(RunTest)
+        self.env.define(TestPassed)
+        self.env.define(TestFailure)
+        self.env.define(_make_goal_handler())
+        self.env.define(TimeoutRule)
+
+        tname = TestDecl.__clipspyx_dsl__.name
+        rname = RunTest.__clipspyx_dsl__.name
+        pname = TestPassed.__clipspyx_dsl__.name
+        fname = TestFailure.__clipspyx_dsl__.name
+
+        self.env.find_template(tname).assert_fact(
+            name=Symbol("t2"), timeout=2.0)
+        self.env.find_template(rname).assert_fact(name=Symbol("t2"))
+
+        runner = self.runner
+
+        async def drive():
+            async def pass_test():
+                await asyncio.sleep(0.15)
+                self.env.find_template(pname).assert_fact(name=Symbol("t2"))
+                runner.wake()
+
+            asyncio.create_task(pass_test())
+
+            start = time.monotonic()
+            await runner.run()
+            elapsed = time.monotonic() - start
+
+            # Must return quickly — well under the 2s timeout
+            self.assertLess(elapsed, 1.0)
+
+            # No timeout failure
+            failures = list(self.env.find_template(fname).facts())
+            self.assertEqual(len(failures), 0)
+
+            # TestPassed was asserted
+            passed = list(self.env.find_template(pname).facts())
+            self.assertEqual(len(passed), 1)
+
+            # No lingering goals
+            goals = list(self.env.goals())
+            self.assertEqual(len(goals), 0)
+
+            await runner.close()
+
+        asyncio.run(drive())
+
+
 if __name__ == '__main__':
     unittest.main()
