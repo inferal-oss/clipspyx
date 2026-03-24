@@ -7,6 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Bound assert effects in DSL: `a = asserts(T(...))` captures the CLIPS fact
+  address via `(bind ?a (assert ...))`, usable as slot values in subsequent
+  `asserts()` calls or as the target of `retracts()` / `modifies()`; supports
+  chaining (`b = asserts(U(ref=a))`)
 - `AsyncRunner.wake()` method: interrupts a blocked `_wait_for_handlers` wait,
   causing the run loop to cycle back to `env.run()` immediately; safe to call
   from any coroutine, latching (pre-set wake consumed on next wait), and

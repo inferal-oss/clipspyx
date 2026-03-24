@@ -189,14 +189,16 @@ def _define_rule(env, cls, rdef: RuleDef):
                 raise TypeError("explicit() requires CLIPS 7.0 or later")
 
     if rdef.effects:
-        # Validate that retracts/modifies reference pattern variables
+        # Validate that retracts/modifies reference pattern or effect variables
         pattern_set = set(rdef.pattern_vars)
+        effect_set = set(rdef.effect_vars)
+        valid_vars = pattern_set | effect_set
         for effect in rdef.effects:
             if isinstance(effect, (RetractEffect, ModifyEffect)):
-                if effect.var_name not in pattern_set:
+                if effect.var_name not in valid_vars:
                     raise TypeError(
                         f"{effect.__class__.__name__}: '{effect.var_name}' "
-                        f"is not a pattern variable (bound via assignment)")
+                        f"is not a pattern variable or bound effect variable")
     else:
         action_method = cls.__clipspyx_action__
         arg_names = _build_arg_list(rdef)

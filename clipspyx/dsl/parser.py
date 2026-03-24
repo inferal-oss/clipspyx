@@ -60,6 +60,7 @@ def parse_rule(cls) -> RuleDef:
     rhs_vars = set()
     multifield_vars = set()
     pattern_vars = []
+    effect_vars = []
     salience = None
 
     # CEs that scope their variables (not visible on RHS)
@@ -84,6 +85,15 @@ def parse_rule(cls) -> RuleDef:
                                              multifield_vars)
                     if result == '__salience__':
                         salience = _extract_int(item.value)
+                    elif (isinstance(result, tuple)
+                          and result[0] == 'bound_effect'):
+                        _, var_name, call_node = result
+                        effect = _parse_effect(call_node, all_vars,
+                                               multifield_vars)
+                        if effect is not None:
+                            effect.bind_name = var_name
+                            effects.append(effect)
+                            effect_vars.append(var_name)
                     elif result is not None:
                         if comment_label:
                             result.label = comment_label
@@ -143,6 +153,7 @@ def parse_rule(cls) -> RuleDef:
         effects=effects,
         ordering=ordering,
         multifield_vars=sorted(multifield_vars),
+        effect_vars=effect_vars,
     )
 
 
@@ -156,6 +167,7 @@ def _process_assign(node, bound_vars, pattern_vars, multifield_vars):
         return '__salience__'
 
     # p = Person(name=name, age=age)  -> AssignedPatternCE
+    # a = asserts(B())               -> bound effect
     if (len(node.targets) == 1
             and isinstance(node.targets[0], cst.AssignTarget)
             and isinstance(node.targets[0].target, cst.Name)
@@ -168,6 +180,8 @@ def _process_assign(node, bound_vars, pattern_vars, multifield_vars):
             pattern_vars.append(target_name)
             return AssignedPatternCE(
                 var_name=target_name, pattern=pattern)
+        if _is_effect_call(call):
+            return ('bound_effect', target_name, call)
 
     return None
 

@@ -582,6 +582,100 @@ class TestEffectParsing(unittest.TestCase):
         self.assertIsInstance(rd.conditions[0], AssignedPatternCE)
         self.assertEqual(len(rd.effects), 1)
 
+    def test_bound_assert_parsed(self):
+        """a = asserts(T(...)) produces AssertEffect with bind_name."""
+        class R(Rule):
+            a = asserts(Result(msg="hi"))
+
+        rd = R.__clipspyx_dsl__
+        self.assertEqual(len(rd.effects), 1)
+        eff = rd.effects[0]
+        self.assertIsInstance(eff, AssertEffect)
+        self.assertEqual(eff.bind_name, 'a')
+        self.assertEqual(eff.template_name, Result.__clipspyx_dsl__.name)
+
+    def test_bound_assert_no_slots(self):
+        """a = asserts(T()) with zero slots still binds."""
+        class R(Rule):
+            a = asserts(Person())
+
+        rd = R.__clipspyx_dsl__
+        eff = rd.effects[0]
+        self.assertEqual(eff.bind_name, 'a')
+        self.assertEqual(eff.slots, [])
+
+    def test_unbound_assert_has_no_bind_name(self):
+        """Unassigned asserts() has bind_name=None (regression guard)."""
+        class R(Rule):
+            asserts(Result(msg="x"))
+
+        rd = R.__clipspyx_dsl__
+        self.assertIsNone(rd.effects[0].bind_name)
+
+    def test_bound_assert_effect_vars_populated(self):
+        """Bound assert variable appears in RuleDef.effect_vars."""
+        class R(Rule):
+            a = asserts(Result(msg="x"))
+            asserts(Counter(value=1))
+
+        rd = R.__clipspyx_dsl__
+        self.assertEqual(rd.effect_vars, ['a'])
+
+    def test_bound_assert_slot_references_var(self):
+        """Slot value referencing a bound assert emits ?varname."""
+        class Ref(Template):
+            target: object
+
+        class R(Rule):
+            a = asserts(Result(msg="x"))
+            asserts(Ref(target=a))
+
+        rd = R.__clipspyx_dsl__
+        ref_eff = rd.effects[1]
+        self.assertEqual(ref_eff.slots[0].clips_expr, '?a')
+
+    def test_bound_assert_chaining(self):
+        """Multiple bound asserts can reference each other."""
+        class Ref(Template):
+            target: object
+
+        class R(Rule):
+            a = asserts(Result(msg="first"))
+            b = asserts(Ref(target=a))
+            asserts(Ref(target=b))
+
+        rd = R.__clipspyx_dsl__
+        self.assertEqual(len(rd.effects), 3)
+        self.assertEqual(rd.effects[0].bind_name, 'a')
+        self.assertEqual(rd.effects[1].bind_name, 'b')
+        self.assertIsNone(rd.effects[2].bind_name)
+        self.assertEqual(rd.effect_vars, ['a', 'b'])
+
+    def test_bound_assert_with_retract(self):
+        """retracts() can reference a bound assert variable."""
+        class R(Rule):
+            a = asserts(Result(msg="temp"))
+            retracts(a)
+
+        rd = R.__clipspyx_dsl__
+        self.assertEqual(len(rd.effects), 2)
+        self.assertIsInstance(rd.effects[0], AssertEffect)
+        self.assertEqual(rd.effects[0].bind_name, 'a')
+        self.assertIsInstance(rd.effects[1], RetractEffect)
+        self.assertEqual(rd.effects[1].var_name, 'a')
+
+    def test_bound_assert_with_modify(self):
+        """modifies() can reference a bound assert variable."""
+        class R(Rule):
+            a = asserts(Counter(value=0))
+            modifies(a, value=99)
+
+        rd = R.__clipspyx_dsl__
+        self.assertEqual(len(rd.effects), 2)
+        self.assertIsInstance(rd.effects[0], AssertEffect)
+        self.assertIsInstance(rd.effects[1], ModifyEffect)
+        self.assertEqual(rd.effects[1].var_name, 'a')
+
 
 # =============================================================================
 # Codegen tests
@@ -947,6 +1041,71 @@ class TestEffectCodegen(unittest.TestCase):
         pname = Person.__clipspyx_dsl__.name
         result = generate_defrule(R.__clipspyx_dsl__)
         self.assertIn(f'(assert ({pname} (name "Alice") (age 30)))', result)
+
+    def test_defrule_bound_assert(self):
+        """Bound assert emits (bind ?var (assert ...))."""
+        class R(Rule):
+            a = asserts(Result(msg="hi"))
+
+        rname = Result.__clipspyx_dsl__.name
+        result = generate_defrule(R.__clipspyx_dsl__)
+        self.assertIn(f'(bind ?a (assert ({rname} (msg "hi"))))', result)
+
+    def test_defrule_bound_assert_no_slots(self):
+        """Bound assert with no slots emits (bind ?var (assert (T)))."""
+        class R(Rule):
+            a = asserts(Person())
+
+        pname = Person.__clipspyx_dsl__.name
+        result = generate_defrule(R.__clipspyx_dsl__)
+        self.assertIn(f'(bind ?a (assert ({pname})))', result)
+
+    def test_defrule_bound_assert_referenced_in_slot(self):
+        """Bound var used as slot value in subsequent assert."""
+        class Ref(Template):
+            target: object
+
+        class R(Rule):
+            a = asserts(Result(msg="x"))
+            asserts(Ref(target=a))
+
+        rname = Result.__clipspyx_dsl__.name
+        refname = Ref.__clipspyx_dsl__.name
+        result = generate_defrule(R.__clipspyx_dsl__)
+        self.assertIn(f'(bind ?a (assert ({rname} (msg "x"))))', result)
+        self.assertIn(f'(assert ({refname} (target ?a)))', result)
+
+    def test_defrule_bound_assert_with_retract(self):
+        """Bound assert followed by retract of same var."""
+        class R(Rule):
+            a = asserts(Result(msg="temp"))
+            retracts(a)
+
+        result = generate_defrule(R.__clipspyx_dsl__)
+        self.assertIn('(bind ?a (assert', result)
+        self.assertIn('(retract ?a)', result)
+
+    def test_defrule_bound_assert_chained(self):
+        """Chained bound asserts: a binds, b references a and binds, c references b."""
+        class Ref(Template):
+            target: object
+
+        class R(Rule):
+            a = asserts(Counter(value=1))
+            b = asserts(Ref(target=a))
+            asserts(Ref(target=b))
+
+        cname = Counter.__clipspyx_dsl__.name
+        refname = Ref.__clipspyx_dsl__.name
+        result = generate_defrule(R.__clipspyx_dsl__)
+        self.assertIn(f'(bind ?a (assert ({cname} (value 1))))', result)
+        self.assertIn(f'(bind ?b (assert ({refname} (target ?a))))', result)
+        # Third effect is unbound
+        lines = result.split('\n')
+        last_effect = [l for l in lines if f'(assert ({refname}' in l
+                       and 'bind' not in l]
+        self.assertEqual(len(last_effect), 1)
+        self.assertIn('(target ?b)', last_effect[0])
 
 
 # =============================================================================
@@ -1901,6 +2060,134 @@ class TestEffectEndToEnd(unittest.TestCase):
         env.define(Counter)
         with self.assertRaises(TypeError):
             env.define(BadModify)
+
+    def test_bound_assert_creates_fact_with_address(self):
+        """Bound assert stores fact address in another fact's slot."""
+        class Ref(Template):
+            target: object
+
+        class Trigger(Template):
+            go: int
+
+        class MakeAndRef(Rule):
+            Trigger(go=1)
+            a = asserts(Counter(value=42))
+            asserts(Ref(target=a))
+
+        env = Environment()
+        TriggerAssert = env.define(Trigger)
+        env.define(Counter)
+        env.define(Ref)
+        env.define(MakeAndRef)
+        env.reset()
+
+        TriggerAssert(go=1)
+        env.run()
+
+        ctpl = env.find_template(Counter.__clipspyx_dsl__.name)
+        counter_facts = list(ctpl.facts())
+        self.assertEqual(len(counter_facts), 1)
+        self.assertEqual(counter_facts[0]['value'], 42)
+
+        reftpl = env.find_template(Ref.__clipspyx_dsl__.name)
+        ref_facts = list(reftpl.facts())
+        self.assertEqual(len(ref_facts), 1)
+        # The target slot holds the fact address of the Counter fact
+        self.assertEqual(ref_facts[0]['target'].index,
+                         counter_facts[0].index)
+
+    def test_bound_assert_retract(self):
+        """Assert then immediately retract via bound variable."""
+        class Trigger(Template):
+            go: int
+
+        class AssertAndRetract(Rule):
+            Trigger(go=1)
+            a = asserts(Counter(value=99))
+            retracts(a)
+
+        env = Environment()
+        TriggerAssert = env.define(Trigger)
+        env.define(Counter)
+        env.define(AssertAndRetract)
+        env.reset()
+
+        TriggerAssert(go=1)
+        env.run()
+
+        ctpl = env.find_template(Counter.__clipspyx_dsl__.name)
+        self.assertEqual(len(list(ctpl.facts())), 0)
+
+    def test_bound_assert_modify(self):
+        """Assert then modify via bound variable."""
+        class Trigger(Template):
+            go: int
+
+        class AssertAndModify(Rule):
+            Trigger(go=1)
+            a = asserts(Counter(value=0))
+            modifies(a, value=77)
+
+        env = Environment()
+        TriggerAssert = env.define(Trigger)
+        env.define(Counter)
+        env.define(AssertAndModify)
+        env.reset()
+
+        TriggerAssert(go=1)
+        env.run()
+
+        ctpl = env.find_template(Counter.__clipspyx_dsl__.name)
+        facts = list(ctpl.facts())
+        self.assertEqual(len(facts), 1)
+        self.assertEqual(facts[0]['value'], 77)
+
+    def test_bound_assert_chaining_e2e(self):
+        """Chained bound asserts: a -> b(ref=a) -> c(ref=b)."""
+        class Ref(Template):
+            target: object
+
+        class Trigger(Template):
+            go: int
+
+        class ChainRule(Rule):
+            Trigger(go=1)
+            a = asserts(Counter(value=1))
+            b = asserts(Ref(target=a))
+            asserts(Ref(target=b))
+
+        env = Environment()
+        TriggerAssert = env.define(Trigger)
+        env.define(Counter)
+        env.define(Ref)
+        env.define(ChainRule)
+        env.reset()
+
+        TriggerAssert(go=1)
+        env.run()
+
+        ctpl = env.find_template(Counter.__clipspyx_dsl__.name)
+        counter_facts = list(ctpl.facts())
+        self.assertEqual(len(counter_facts), 1)
+
+        reftpl = env.find_template(Ref.__clipspyx_dsl__.name)
+        ref_facts = list(reftpl.facts())
+        self.assertEqual(len(ref_facts), 2)
+
+        # One Ref points to Counter, the other points to the first Ref
+        targets = {f['target'].index for f in ref_facts}
+        self.assertIn(counter_facts[0].index, targets)
+
+    def test_retracts_unbound_effect_var_raises(self):
+        """retracts() with a name that is neither pattern nor effect var raises."""
+        class BadRule(Rule):
+            asserts(Result(msg="x"))
+            retracts(z)
+
+        env = Environment()
+        env.define(Result)
+        with self.assertRaises(TypeError):
+            env.define(BadRule)
 
     def test_effects_only_rule_no_action(self):
         """Effects-only rule works without __action__."""

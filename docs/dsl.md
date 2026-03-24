@@ -715,10 +715,41 @@ class IncrementCounter(Rule):
     asserts(Counter(value=v + 1))
 ```
 
+#### Binding assert results
+
+Assign the result of `asserts()` to a variable to capture the CLIPS fact
+address. The bound variable can then be used as a slot value in subsequent
+effects, or passed to `retracts()` / `modifies()`:
+
+```python
+class CreateAndLink(Rule):
+    Trigger(go=1)
+    a = asserts(Record(value=42))
+    asserts(Reference(target=a))
+```
+
+```clips
+(defrule myapp.CreateAndLink
+  (myapp.Trigger (go 1))
+  =>
+  (bind ?a (assert (myapp.Record (value 42))))
+  (assert (myapp.Reference (target ?a))))
+```
+
+Bindings can be chained and used with retract or modify:
+
+```python
+class ChainAndModify(Rule):
+    Trigger(go=1)
+    a = asserts(Counter(value=0))
+    b = asserts(Reference(target=a))
+    modifies(a, value=1)
+```
+
 ### retracts()
 
 Retract a matched fact. The argument must be a pattern variable (from an
-assigned pattern):
+assigned pattern) or a bound effect variable (from an assigned `asserts()`):
 
 ```python
 class RemovePerson(Rule):
@@ -735,8 +766,8 @@ class RemovePerson(Rule):
 
 ### modifies()
 
-Modify slots on a matched fact. The first argument is a pattern variable;
-keyword arguments specify the new slot values:
+Modify slots on a matched fact. The first argument is a pattern variable or
+bound effect variable; keyword arguments specify the new slot values:
 
 ```python
 class Promote(Rule):
@@ -977,8 +1008,9 @@ they are defined (forward references are resolved at `define()` time).
 | `after(OtherRule)` | `(declare (salience N))` | Ordering: fire after target |
 | `concurrent(OtherRule)` | `(declare (salience N))` | Ordering: same salience as target |
 | `asserts(T(slot=val))` | `(assert (mod.T (slot val)))` | Effect: assert fact |
-| `retracts(p)` | `(retract ?p)` | Effect: retract matched fact |
-| `modifies(p, slot=val)` | `(modify ?p (slot val))` | Effect: modify matched fact |
+| `a = asserts(T(...))` | `(bind ?a (assert (mod.T ...)))` | Effect: assert and bind fact address |
+| `retracts(p)` | `(retract ?p)` | Effect: retract matched/bound fact |
+| `modifies(p, slot=val)` | `(modify ?p (slot val))` | Effect: modify matched/bound fact |
 | `__clips_name__ = "x"` | `(deftemplate x ...)` | Override CLIPS name |
 | `P = env.define(Person)` | — | Bound asserter (primary) |
 | `Person(__env__=env, ...)` | — | Direct assertion (fallback) |

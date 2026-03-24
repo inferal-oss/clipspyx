@@ -266,12 +266,17 @@ class SlotValue:
 class AssertEffect:
     template_name: str
     slots: list[SlotValue] = field(default_factory=list)
+    bind_name: str | None = None
 
     def to_clips(self) -> str:
         if self.slots:
             slots_str = ' '.join(f'({s.name} {s.clips_expr})' for s in self.slots)
-            return f'(assert ({self.template_name} {slots_str}))'
-        return f'(assert ({self.template_name}))'
+            inner = f'(assert ({self.template_name} {slots_str}))'
+        else:
+            inner = f'(assert ({self.template_name}))'
+        if self.bind_name:
+            return f'(bind ?{self.bind_name} {inner})'
+        return inner
 
 
 @dataclass
@@ -313,3 +318,4 @@ class RuleDef:
     effects: list = field(default_factory=list)
     ordering: list[OrderingConstraint] = field(default_factory=list)
     multifield_vars: list[str] = field(default_factory=list)
+    effect_vars: list[str] = field(default_factory=list)
