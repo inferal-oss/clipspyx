@@ -927,8 +927,8 @@ class TestAsyncRunnerPersistentDedup(unittest.TestCase):
     def setUp(self):
         self.env = Environment()
 
-    def test_one_task_per_template(self):
-        """Multiple goals for the same persistent template share one task."""
+    def test_one_task_per_goal(self):
+        """Each goal for the same persistent template gets its own task."""
 
         class Sensor(Template):
             reading: int
@@ -953,8 +953,7 @@ class TestAsyncRunnerPersistentDedup(unittest.TestCase):
         async def sensor_handler(goal, env):
             dispatch_count.append(1)
             await asyncio.sleep(0.01)
-            Sensor(__env__=env, reading=42)
-            Sensor(__env__=env, reading=99)
+            Sensor(__env__=env, reading=int(goal['reading']))
             yield
 
         runner = AsyncRunner(self.env)
@@ -968,8 +967,8 @@ class TestAsyncRunnerPersistentDedup(unittest.TestCase):
 
         result = asyncio.run(runner.run())
         self.assertEqual(result, "completed")
-        # Should have been dispatched exactly once (one task per template)
-        self.assertEqual(len(dispatch_count), 1)
+        # Each goal dispatches its own handler (per-goal, not per-template)
+        self.assertEqual(len(dispatch_count), 2)
 
 
 @unittest.skipUnless(CLIPS_70, "CLIPS 7.0+ required")
@@ -1936,6 +1935,158 @@ class TestGoalCancellationViaNegation(unittest.TestCase):
             await runner.close()
 
         asyncio.run(drive())
+
+
+# ---------------------------------------------------------------------------
+# Multi-timer dispatch tests (persistent task keying bug)
+# ---------------------------------------------------------------------------
+
+@unittest.skipUnless(CLIPS_70, "CLIPS 7.0+ required")
+class TestMultiTimerDispatch(unittest.TestCase):
+    """Prove multiple timer-event goals dispatch concurrently.
+
+    The bug: _persistent_tasks was keyed by template name, so one
+    generator-backed handler (every timer) blocked all other timer-event
+    goals from being dispatched.
+    """
+
+    def setUp(self):
+        self.env = Environment()
+        self.runner = AsyncRunner(self.env)
+
+    def test_two_generator_goals_same_template(self):
+        """Two goals for a custom generator handler both dispatch.
+
+        Uses a custom template with a generator handler (not the built-in
+        timer handler) so BOTH goals produce generator tasks. With the old
+        template-name keying, whichever goal was dispatched first would
+        block the second -- regardless of CLIPS goal ordering.
+        """
+
+        class Sensor(Template):
+            tag: Symbol
+
+        class SensorResult(Template):
+            tag: Symbol
+
+        class HandleSensorGoal(Rule):
+            goal(Sensor(tag=t))
+
+        class NeedAlpha(Rule):
+            s = Sensor(tag=Symbol("alpha"))
+            asserts(SensorResult(tag=Symbol("alpha")))
+
+        class NeedBeta(Rule):
+            s = Sensor(tag=Symbol("beta"))
+            asserts(SensorResult(tag=Symbol("beta")))
+
+        dispatched_tags = []
+
+        async def sensor_gen(goal, env):
+            tag = str(goal['tag'])
+            dispatched_tags.append(tag)
+            await asyncio.sleep(0.01)
+            Sensor(__env__=env, tag=Symbol(tag))
+            yield
+
+        self.env.define(Sensor)
+        self.env.define(SensorResult)
+        self.env.define(HandleSensorGoal)
+        self.env.define(NeedAlpha)
+        self.env.define(NeedBeta)
+        self.runner.register_handler(Sensor, sensor_gen)
+        self.env.reset()
+
+        asyncio.run(self.runner.run())
+
+        # Both goals must have been dispatched (order doesn't matter)
+        self.assertEqual(sorted(dispatched_tags), ['alpha', 'beta'])
+
+        srname = SensorResult.__clipspyx_dsl__.name
+        results = {str(f['tag'])
+                   for f in self.env.find_template(srname).facts()}
+        self.assertEqual(results, {'alpha', 'beta'})
+
+    def test_two_every_timers_concurrent(self):
+        """Two independent every-timers must both produce beats."""
+
+        class BeatA(Template):
+            n: int
+
+        class BeatB(Template):
+            n: int
+
+        class HandleTimerGoal(Rule):
+            goal(TimerEvent(kind=k, name=n, seconds=s))
+
+        class OnBeatA(Rule):
+            te = TimerEvent(
+                kind=Symbol("every"), name=Symbol("beat-a"),
+                seconds=0.03, count=c)
+            asserts(BeatA(n=c))
+
+        class OnBeatB(Rule):
+            te = TimerEvent(
+                kind=Symbol("every"), name=Symbol("beat-b"),
+                seconds=0.03, count=c)
+            asserts(BeatB(n=c))
+
+        self.env.define(BeatA)
+        self.env.define(BeatB)
+        self.env.define(HandleTimerGoal)
+        self.env.define(OnBeatA)
+        self.env.define(OnBeatB)
+        self.env.reset()
+
+        asyncio.run(self.runner.run(max_cycles=5))
+
+        aname = BeatA.__clipspyx_dsl__.name
+        bname = BeatB.__clipspyx_dsl__.name
+        a_facts = list(self.env.find_template(aname).facts())
+        b_facts = list(self.env.find_template(bname).facts())
+        self.assertGreaterEqual(len(a_facts), 1, "beat-a never fired")
+        self.assertGreaterEqual(len(b_facts), 1, "beat-b never fired")
+
+    def test_after_timer_does_not_block_every_timer(self):
+        """An after-timer must not prevent an every-timer from firing."""
+
+        class EveryResult2(Template):
+            n: int
+
+        class AfterResult2(Template):
+            msg: Symbol
+
+        class HandleTimerGoal(Rule):
+            goal(TimerEvent(kind=k, name=n, seconds=s))
+
+        class OnAfter(Rule):
+            te = TimerEvent(
+                kind=Symbol("after"), name=Symbol("first"),
+                seconds=0.02)
+            asserts(AfterResult2(msg=Symbol("done")))
+
+        class OnEvery(Rule):
+            te = TimerEvent(
+                kind=Symbol("every"), name=Symbol("second"),
+                seconds=0.03, count=c)
+            asserts(EveryResult2(n=c))
+
+        self.env.define(EveryResult2)
+        self.env.define(AfterResult2)
+        self.env.define(HandleTimerGoal)
+        self.env.define(OnAfter)
+        self.env.define(OnEvery)
+        self.env.reset()
+
+        asyncio.run(self.runner.run(max_cycles=5))
+
+        arname = AfterResult2.__clipspyx_dsl__.name
+        after_facts = list(self.env.find_template(arname).facts())
+        self.assertEqual(len(after_facts), 1)
+
+        ername = EveryResult2.__clipspyx_dsl__.name
+        every_facts = list(self.env.find_template(ername).facts())
+        self.assertGreaterEqual(len(every_facts), 1, "every-timer never fired")
 
 
 if __name__ == '__main__':

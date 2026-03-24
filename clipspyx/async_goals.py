@@ -220,7 +220,7 @@ class AsyncRunner:
         if state is None:
             enable_goal_handlers(env)
         self.env = env
-        self._persistent_tasks = {}           # template_name -> asyncio.Task
+        self._persistent_tasks = {}           # goal_index -> asyncio.Task
         self._generators = {}                 # task_id -> async generator
         self._closed = False
         self._skipped = set()                 # goal indices completed without satisfying
@@ -300,9 +300,9 @@ class AsyncRunner:
 
     def _prune_done_persistent(self):
         """Remove completed persistent tasks from tracking."""
-        for name in [n for n, t in self._persistent_tasks.items()
-                     if t.done()]:
-            del self._persistent_tasks[name]
+        for idx in [i for i, t in self._persistent_tasks.items()
+                    if t.done()]:
+            del self._persistent_tasks[idx]
 
     def _has_active_persistent(self):
         """True if any persistent task is still running."""
@@ -325,29 +325,35 @@ class AsyncRunner:
     def _dispatch_goals(self, state):
         """Scan CLIPS goals and create handler tasks for new ones.
 
-        Generators (yield) are tracked per-template in _persistent_tasks.
-        Coroutines are tracked per-goal in state.pending.
+        Both generators and coroutines are tracked per-goal: generators in
+        _persistent_tasks, coroutines in state.pending.
         """
         for goal in self.env.goals():
             tname = goal.template.name
-            # Already have a running persistent task for this template?
-            if tname in self._persistent_tasks \
-                    and not self._persistent_tasks[tname].done():
-                continue
             handler = state.handlers.get(tname)
             if handler is None:
                 continue
             idx = goal.index
+            # Already tracked?
+            if idx in self._persistent_tasks \
+                    and not self._persistent_tasks[idx].done():
+                continue
             if idx in self._skipped or idx in state.pending:
                 continue
             task, is_gen = self._create_handler_task(handler, goal)
             if is_gen:
-                self._persistent_tasks[tname] = task
+                self._persistent_tasks[idx] = task
             else:
                 state.pending[idx] = task
 
     def _cancel_retracted_goals(self, state):
-        """Cancel non-persistent tasks whose goals no longer exist."""
+        """Cancel non-persistent tasks whose goals no longer exist.
+
+        Persistent tasks (_persistent_tasks) are intentionally NOT cancelled
+        here.  In CLIPS backward chaining, a goal is retracted when satisfied
+        (fact asserted), but the generator handler must keep running for
+        subsequent iterations (e.g. every-timer ticks).
+        """
         for idx in list(state.pending):
             try:
                 self.env.find_goal(idx)
@@ -417,8 +423,8 @@ class AsyncRunner:
         owners = {}
         for idx, t in state.pending.items():
             owners[id(t)] = (state.pending, idx)
-        for name, t in self._persistent_tasks.items():
-            owners[id(t)] = (self._persistent_tasks, name)
+        for idx, t in self._persistent_tasks.items():
+            owners[id(t)] = (self._persistent_tasks, idx)
 
         for task in done:
             owner = owners.get(id(task))

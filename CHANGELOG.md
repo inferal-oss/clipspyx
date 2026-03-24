@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- `AsyncRunner` could only dispatch one generator-backed handler per template;
+  multiple goals for the same template (e.g. two `every` timers, or an `every`
+  timer blocking an `after` timer) now dispatch concurrently; `_persistent_tasks`
+  is keyed by goal index instead of template name
+
 ### Added
 - Periodic callback API: `env.add_periodic_function(name, callback, priority)`
   registers a Python callback invoked by CLIPS during rule execution (e.g. inside
