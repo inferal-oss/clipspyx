@@ -3076,5 +3076,132 @@ class TestExternalAddressSlots(unittest.TestCase):
         self.assertEqual(copied[1].name, "deploy")
 
 
+@unittest.skipIf(CLIPS_MAJOR < 7, "goal + not CE requires CLIPS 7.0+")
+class TestGoalWithNotCE(unittest.TestCase):
+    """Prove that goal CE and not CE work together in the DSL.
+
+    This is the canonical backward-chaining pattern from the CLIPS reference:
+    a goal CE detects when a goal is generated for a template, and a not CE
+    ensures no matching fact already exists, so the rule fires to supply it.
+    """
+
+    def test_goal_plus_not_ce_parses(self):
+        """goal() + ~Template() in same rule produces GoalCE + NotCE in IR."""
+
+        class AV(Template):
+            attribute: str
+            value: str = ''
+
+        class GetValue(Rule):
+            goal(AV(attribute=attr))
+            ~AV(attribute=attr)
+
+            def __action__(self):
+                pass
+
+        rd = GetValue.__clipspyx_dsl__
+        self.assertEqual(len(rd.conditions), 2)
+        self.assertIsInstance(rd.conditions[0], GoalCE)
+        self.assertIsInstance(rd.conditions[1], NotCE)
+        # Variable binding shared across goal and not
+        self.assertEqual(rd.bound_vars, ['attr'])
+
+    def test_goal_plus_not_ce_codegen(self):
+        """Codegen produces valid (goal ...) (not ...) CLIPS syntax."""
+
+        class AV(Template):
+            attribute: str
+            value: str = ''
+
+        class GetValue(Rule):
+            goal(AV(attribute=attr))
+            ~AV(attribute=attr)
+
+            def __action__(self):
+                pass
+
+        avname = AV.__clipspyx_dsl__.name
+        result = generate_defrule(GetValue.__clipspyx_dsl__)
+        self.assertIn(f'(goal ({avname} (attribute ?attr)))', result)
+        self.assertIn(f'(not ({avname} (attribute ?attr)))', result)
+
+    def test_goal_plus_not_ce_fires(self):
+        """End-to-end: goal + not CE rule fires during backward chaining."""
+        results = []
+
+        class Symptom(Template):
+            name: Symbol
+
+        class Diagnosis(Template):
+            disease: Symbol
+
+        # Goal handler: when a symptom goal is generated and no matching
+        # symptom fact exists, record that we were asked to supply it.
+        class HandleSymptomGoal(Rule):
+            goal(Symptom(name=n))
+            ~Symptom(name=n)
+
+            def __action__(self):
+                results.append(('goal', str(self.n)))
+
+        # Forward rule: needs two symptoms to diagnose.
+        # When only fever exists, rash is missing -> goal generated.
+        class DiagnoseMeasles(Rule):
+            Symptom(name=Symbol('fever'))
+            Symptom(name=Symbol('rash'))
+            asserts(Diagnosis(disease=Symbol('measles')))
+
+        env = Environment()
+        SymptomAssert = env.define(Symptom)
+        env.define(Diagnosis)
+        env.define(HandleSymptomGoal)
+        env.define(DiagnoseMeasles)
+        env.reset()
+
+        # Assert fever only -> rash goal generated -> handler fires
+        SymptomAssert(name=Symbol('fever'))
+        env.run()
+
+        self.assertGreater(len(results), 0)
+        self.assertIn(('goal', 'rash'), results)
+
+    def test_goal_plus_not_ce_does_not_fire_when_fact_exists(self):
+        """Goal + not CE rule does NOT fire when the fact already exists."""
+        results = []
+
+        class Symptom(Template):
+            name: Symbol
+
+        class Diagnosis(Template):
+            disease: Symbol
+
+        class HandleSymptomGoal(Rule):
+            goal(Symptom(name=n))
+            ~Symptom(name=n)
+
+            def __action__(self):
+                results.append(('goal', str(self.n)))
+
+        class DiagnoseMeasles(Rule):
+            Symptom(name=Symbol('fever'))
+            Symptom(name=Symbol('rash'))
+            asserts(Diagnosis(disease=Symbol('measles')))
+
+        env = Environment()
+        SymptomAssert = env.define(Symptom)
+        env.define(Diagnosis)
+        env.define(HandleSymptomGoal)
+        env.define(DiagnoseMeasles)
+        env.reset()
+
+        # Both symptoms present -> no unsatisfied pattern -> no goal -> handler doesn't fire
+        SymptomAssert(name=Symbol('fever'))
+        SymptomAssert(name=Symbol('rash'))
+        env.run()
+
+        goal_fires = [r for r in results if r[0] == 'goal']
+        self.assertEqual(len(goal_fires), 0)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -1698,5 +1698,83 @@ class TestAsyncRunnerWake(unittest.TestCase):
         asyncio.run(drive())
 
 
+# ---------------------------------------------------------------------------
+# Goal + Not CE with TimerEvent tests
+# ---------------------------------------------------------------------------
+
+@unittest.skipUnless(CLIPS_70, "CLIPS 7.0+ required")
+class TestGoalWithNotCETimer(unittest.TestCase):
+    """Prove goal + not CE works with async TimerEvent handlers.
+
+    The canonical backward-chaining pattern uses goal() to detect when a
+    goal is generated and ~Template() to ensure no matching fact exists.
+    This must work with the built-in timer goal handler.
+    """
+
+    def setUp(self):
+        self.env = Environment()
+        self.runner = AsyncRunner(self.env)
+
+    def test_timer_fires_with_goal_plus_not_ce_handler(self):
+        """Timer fires when the goal handler rule uses goal + not CE."""
+
+        # Use goal + not CE instead of bare goal() for the handler rule
+        class HandleTimerGoalWithNot(Rule):
+            goal(TimerEvent(kind=k, name=n, seconds=s))
+            ~TimerEvent(kind=k, name=n, seconds=s)
+
+        class OnTimerFired(Rule):
+            te = TimerEvent(
+                kind=Symbol("after"), name=Symbol("gn-test"), seconds=0.05)
+            asserts(TimerResult(msg=Symbol("goal-not-done")))
+
+        self.env.define(TimerResult)
+        self.env.define(HandleTimerGoalWithNot)
+        self.env.define(OnTimerFired)
+        self.env.reset()
+
+        start = time.time()
+        asyncio.run(self.runner.run())
+        elapsed = time.time() - start
+
+        self.assertGreaterEqual(elapsed, 0.04)
+        rname = TimerResult.__clipspyx_dsl__.name
+        results = [f for f in self.env.find_template(rname).facts()]
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['msg'], Symbol('goal-not-done'))
+
+    def test_periodic_timer_with_goal_plus_not_ce_handler(self):
+        """Periodic timer fires multiple times with goal + not CE handler."""
+
+        class BeatLogGN(Template):
+            n: int
+
+        class HandleTimerGoalWithNot(Rule):
+            goal(TimerEvent(kind=k, name=n, seconds=s))
+            ~TimerEvent(kind=k, name=n, seconds=s)
+
+        class OnBeat(Rule):
+            te = TimerEvent(
+                kind=Symbol("every"), name=Symbol("gn-beat"),
+                seconds=0.05, count=c)
+            asserts(BeatLogGN(n=c))
+
+        self.env.define(BeatLogGN)
+        self.env.define(HandleTimerGoalWithNot)
+        self.env.define(OnBeat)
+        self.env.reset()
+
+        asyncio.run(self.runner.run(max_cycles=4))
+
+        blname = BeatLogGN.__clipspyx_dsl__.name
+        logs = sorted(
+            [f for f in self.env.find_template(blname).facts()],
+            key=lambda f: int(f['n']))
+        self.assertGreaterEqual(len(logs), 3)
+        self.assertEqual(int(logs[0]['n']), 0)
+        self.assertEqual(int(logs[1]['n']), 1)
+        self.assertEqual(int(logs[2]['n']), 2)
+
+
 if __name__ == '__main__':
     unittest.main()
