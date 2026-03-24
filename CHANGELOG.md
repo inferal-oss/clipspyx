@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ## [0.8.0] - 2026-03-24
+
 ### Added
 - Bound assert effects in DSL: `a = asserts(T(...))` captures the CLIPS fact
   address via `(bind ?a (assert ...))`, usable as slot values in subsequent

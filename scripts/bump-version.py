@@ -25,7 +25,7 @@ VERSION_FILES = [
 ]
 
 CHANGELOG = "CHANGELOG.md"
-UNRELEASED_RE = re.compile(r"^(## \[Unreleased\])\s*$", re.MULTILINE)
+UNRELEASED_RE = re.compile(r"^## \[Unreleased\]\s*\n\n*", re.MULTILINE)
 VERSION_HEADING_RE = re.compile(r"^## \[(\d+\.\d+\.\d+)\]", re.MULTILINE)
 LINK_SECTION_RE = re.compile(
     r"^\[Unreleased\]:.*(?:\n\[[\d.]+\]:.*)*\n?$", re.MULTILINE)
@@ -81,7 +81,7 @@ def stamp_unreleased(text: str, new_version: str) -> str | None:
         print(f"  SKIP {CHANGELOG} heading (v{new_version} already exists)")
         return None
     today = date.today().isoformat()
-    replacement = f"## [Unreleased]\n\n## [{new_version}] - {today}"
+    replacement = f"## [Unreleased]\n\n## [{new_version}] - {today}\n\n"
     new_text = UNRELEASED_RE.sub(replacement, text)
     return new_text if new_text != text else None
 
