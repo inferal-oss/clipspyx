@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-03-23
+
+### Fixed
+- `AsyncRunner` infinite re-dispatch of coroutine goal handlers that complete
+  without satisfying their goal; handler now runs once per goal per `run()` call
+  and the runner returns `"completed"` instead of looping
+
 ## [0.7.0] - 2026-03-23
 
 ### Added

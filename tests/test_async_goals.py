@@ -1242,5 +1242,228 @@ class TestAsyncRunnerLifecycle(unittest.TestCase):
         asyncio.run(drive())
 
 
+# ---------------------------------------------------------------------------
+# Noop handler (whitebox) — verifies dispatch count
+# ---------------------------------------------------------------------------
+
+@unittest.skipUnless(CLIPS_70, "CLIPS 7.0+ required")
+class TestAsyncRunnerNoopHandler(unittest.TestCase):
+    """Regression: coroutine handler that cannot satisfy its goal
+    must not be re-dispatched infinitely."""
+
+    def setUp(self):
+        self.env = Environment()
+
+    def test_noop_handler_dispatched_once(self):
+        """A handler that completes without satisfying the goal runs once."""
+
+        class Wanted(Template):
+            x: int
+
+        class WantedResult(Template):
+            x: int
+
+        class NeedWanted(Rule):
+            goal(Wanted(x=v))
+
+        class OnWanted(Rule):
+            w = Wanted(x=v)
+            asserts(WantedResult(x=v))
+
+        dispatch_count = []
+
+        async def noop_handler(goal, env):
+            dispatch_count.append(1)
+            await asyncio.sleep(0.001)
+            # Does NOT assert a Wanted fact → goal stays unsatisfied
+
+        runner = AsyncRunner(self.env)
+        self.env.define(Wanted)
+        self.env.define(WantedResult)
+        self.env.define(NeedWanted)
+        self.env.define(OnWanted)
+        runner.register_handler(Wanted, noop_handler)
+        self.env.reset()
+
+        async def drive():
+            result = await asyncio.wait_for(runner.run(), timeout=2.0)
+            self.assertEqual(result, "completed")
+            self.assertEqual(len(dispatch_count), 1)
+            await runner.close()
+
+        asyncio.run(drive())
+
+
+# ---------------------------------------------------------------------------
+# Unsatisfied-goal blackbox tests — no access to runner internals
+# ---------------------------------------------------------------------------
+
+@unittest.skipUnless(CLIPS_70, "CLIPS 7.0+ required")
+class TestAsyncRunnerUnsatisfiedGoalBlackbox(unittest.TestCase):
+    """Blackbox tests for unsatisfied coroutine goal behavior."""
+
+    def setUp(self):
+        self.env = Environment()
+
+    def test_unsatisfied_handler_terminates(self):
+        """Runner terminates when a handler can't satisfy its goal."""
+
+        class Info(Template):
+            key: Symbol
+
+        class InfoResult(Template):
+            key: Symbol
+
+        class NeedInfo(Rule):
+            goal(Info(key=k))
+
+        class OnInfo(Rule):
+            i = Info(key=k)
+            asserts(InfoResult(key=k))
+
+        async def noop(goal, env):
+            await asyncio.sleep(0.001)
+
+        runner = AsyncRunner(self.env)
+        self.env.define(Info)
+        self.env.define(InfoResult)
+        self.env.define(NeedInfo)
+        self.env.define(OnInfo)
+        runner.register_handler(Info, noop)
+        self.env.reset()
+
+        async def drive():
+            result = await asyncio.wait_for(runner.run(), timeout=2.0)
+            self.assertEqual(result, "completed")
+            # Goal should still exist (unsatisfied, not retracted)
+            goals = list(self.env.goals())
+            self.assertGreater(len(goals), 0,
+                               "Unsatisfied goal should persist")
+            await runner.close()
+
+        asyncio.run(drive())
+
+    def test_satisfied_handler_not_blocked(self):
+        """A satisfying handler works normally alongside an unsatisfying one."""
+
+        class Alpha(Template):
+            tag: Symbol
+
+        class AlphaResult(Template):
+            tag: Symbol
+
+        class NeedAlpha(Rule):
+            goal(Alpha(tag=t))
+
+        class OnAlpha(Rule):
+            a = Alpha(tag=t)
+            asserts(AlphaResult(tag=t))
+
+        class Beta(Template):
+            tag: Symbol
+
+        class BetaResult(Template):
+            tag: Symbol
+
+        class NeedBeta(Rule):
+            goal(Beta(tag=t))
+
+        class OnBeta(Rule):
+            b = Beta(tag=t)
+            asserts(BetaResult(tag=t))
+
+        alpha_calls = []
+        beta_calls = []
+
+        async def alpha_handler(goal, env):
+            """Satisfies its goal by asserting the needed fact."""
+            alpha_calls.append(1)
+            await asyncio.sleep(0.001)
+            Alpha(__env__=env, tag=Symbol("ok"))
+
+        async def beta_handler(goal, env):
+            """Cannot satisfy its goal — does nothing."""
+            beta_calls.append(1)
+            await asyncio.sleep(0.001)
+
+        runner = AsyncRunner(self.env)
+        self.env.define(Alpha)
+        self.env.define(AlphaResult)
+        self.env.define(NeedAlpha)
+        self.env.define(OnAlpha)
+        self.env.define(Beta)
+        self.env.define(BetaResult)
+        self.env.define(NeedBeta)
+        self.env.define(OnBeta)
+        runner.register_handler(Alpha, alpha_handler)
+        runner.register_handler(Beta, beta_handler)
+        self.env.reset()
+
+        async def drive():
+            result = await asyncio.wait_for(runner.run(), timeout=5.0)
+            self.assertEqual(result, "completed")
+            # Alpha handler ran and satisfied its goal
+            self.assertGreater(len(alpha_calls), 0)
+            alpha_name = AlphaResult.__clipspyx_dsl__.name
+            alpha_results = list(self.env.find_template(alpha_name).facts())
+            self.assertGreater(len(alpha_results), 0,
+                               "Alpha goal should be satisfied")
+            # Beta handler ran once but could not satisfy
+            self.assertEqual(len(beta_calls), 1)
+            await runner.close()
+
+        asyncio.run(drive())
+
+    def test_new_goal_dispatched_after_unsatisfied(self):
+        """After reset(), a new goal (same template, new index) is dispatched
+        even though the previous incarnation was skipped."""
+
+        class Fetch(Template):
+            url: Symbol
+
+        class FetchResult(Template):
+            url: Symbol
+
+        class NeedFetch(Rule):
+            goal(Fetch(url=u))
+
+        class OnFetch(Rule):
+            f = Fetch(url=u)
+            asserts(FetchResult(url=u))
+
+        calls = []
+
+        async def fetch_handler(goal, env):
+            calls.append(1)
+            await asyncio.sleep(0.001)
+            # Never satisfies the goal
+
+        runner = AsyncRunner(self.env)
+        self.env.define(Fetch)
+        self.env.define(FetchResult)
+        self.env.define(NeedFetch)
+        self.env.define(OnFetch)
+        runner.register_handler(Fetch, fetch_handler)
+        self.env.reset()
+
+        async def drive():
+            # First run: handler dispatched, can't satisfy, skipped
+            result = await asyncio.wait_for(runner.run(), timeout=2.0)
+            self.assertEqual(result, "completed")
+            self.assertEqual(len(calls), 1)
+
+            # Reset creates fresh goals with new indices
+            self.env.reset()
+
+            # Second run: new goal (different index) should be dispatched
+            result = await asyncio.wait_for(runner.run(), timeout=2.0)
+            self.assertEqual(result, "completed")
+            self.assertEqual(len(calls), 2,
+                             "Handler should be dispatched for new goal")
+            await runner.close()
+
+        asyncio.run(drive())
+
+
 if __name__ == '__main__':
     unittest.main()

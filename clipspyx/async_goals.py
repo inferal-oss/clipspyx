@@ -219,6 +219,7 @@ class AsyncRunner:
         self._persistent_tasks = {}           # template_name -> asyncio.Task
         self._generators = {}                 # task_id -> async generator
         self._closed = False
+        self._skipped = set()                 # goal indices completed without satisfying
 
     def register_handler(self, template, handler):
         """Register an async handler for goals matching a template.
@@ -254,6 +255,7 @@ class AsyncRunner:
     async def _run_loop(self, state, limit, max_cycles):
         """Core inference loop."""
         state.halted = False
+        self._skipped.clear()
         cycle = 0
         while max_cycles is None or cycle < max_cycles:
             cycle += 1
@@ -321,13 +323,13 @@ class AsyncRunner:
             handler = state.handlers.get(tname)
             if handler is None:
                 continue
+            idx = goal.index
+            if idx in self._skipped or idx in state.pending:
+                continue
             task, is_gen = self._create_handler_task(handler, goal)
             if is_gen:
                 self._persistent_tasks[tname] = task
             else:
-                idx = goal.index
-                if idx in state.pending:
-                    continue
                 state.pending[idx] = task
 
     def _cancel_retracted_goals(self, state):
@@ -341,6 +343,12 @@ class AsyncRunner:
                 gen = self._generators.pop(id(task), None)
                 if gen is not None:
                     asyncio.create_task(gen.aclose())
+
+        for idx in list(self._skipped):
+            try:
+                self.env.find_goal(idx)
+            except LookupError:
+                self._skipped.discard(idx)
 
     async def _wait_for_handlers(self, state):
         """Wait for at least one handler to complete.
@@ -393,7 +401,15 @@ class AsyncRunner:
                 self._generators[id(new_task)] = gen
                 if owner: owner[0][owner[1]] = new_task
             else:
-                if owner: del owner[0][owner[1]]
+                if owner:
+                    if gen is None and owner[0] is state.pending:
+                        idx = owner[1]
+                        try:
+                            self.env.find_goal(idx)
+                            self._skipped.add(idx)
+                        except LookupError:
+                            pass
+                    del owner[0][owner[1]]
 
     async def close(self):
         """Cancel all tasks (persistent and non-persistent) and disable
@@ -411,6 +427,7 @@ class AsyncRunner:
             state.pending.clear()
         # Generator cleanup happens via task cancellation above
         self._generators.clear()
+        self._skipped.clear()
         disable_goal_handlers(self.env)
         self._closed = True
 
