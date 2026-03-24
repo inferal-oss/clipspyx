@@ -29,7 +29,7 @@ jobs:
 
       - name: Install and test
         run: |
-          uv sync --extra ${{ matrix.variant }} --extra dsl
+          uv sync --extra ${{ matrix.variant }} --extra dsl --group dev
           uv run pytest tests/ -v
 
   build-wheels:
@@ -80,7 +80,7 @@ jobs:
           uv pip install --system dist/clipspyx_ffi-*.whl
           uv pip install --system dist/clipspyx_ffi_${{ matrix.variant }}-*.whl
           uv pip install --system ".[dsl]"
-          uv pip install --system pytest
+          uv pip install --system pytest hypothesis
 
           # Run tests from a temp directory to ensure we test the installed package
           mkdir _test_run && cd _test_run
@@ -114,7 +114,7 @@ jobs:
 
       - name: Build and test (auto-fetch)
         run: |
-          uv sync --extra ${{ matrix.variant }} --extra dsl
+          uv sync --extra ${{ matrix.variant }} --extra dsl --group dev
           uv run pytest tests/ -v
 
   build-root:
