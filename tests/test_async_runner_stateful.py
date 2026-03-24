@@ -124,6 +124,7 @@ SWARM_FEATURES = [
     "halt",               # trigger halt_async via fact assertion
     "active_toggle",      # toggle the Active controlling fact
     "completing",         # persistent handlers complete quickly (vs loop forever)
+    "wake",               # call runner.wake() at random times
 ]
 
 
@@ -290,6 +291,15 @@ class AsyncRunnerStateMachine(RuleBasedStateMachine):
         """Assert SmHaltTrigger so the halt rule fires on next env.run()."""
         SmHaltTrigger(__env__=self.env)
         self._halt_pending = True
+
+    @precondition(lambda self: (
+        not self._is_closed
+        and "wake" in self._swarm
+    ))
+    @rule()
+    def wake_runner(self):
+        """Call runner.wake() to interrupt blocked waits."""
+        self.runner.wake()
 
     @precondition(lambda self: not self._is_closed)
     @rule(max_cyc=st.sampled_from([None, 1, 2, 3, 5, 10]))

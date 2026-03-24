@@ -164,6 +164,28 @@ Each cycle:
 Returns when no goals remain and no handlers are pending, when `max_cycles`
 is reached, or when `halt_async()` is called.
 
+### Waking the runner
+
+When external code injects facts (e.g. from an API endpoint) while the runner
+is blocked waiting for handlers, call `wake()` to interrupt the wait and force
+the runner to cycle back to `env.run()`:
+
+```python
+async with AsyncRunner(env) as runner:
+    run_task = asyncio.create_task(runner.run())
+
+    # Later, from another coroutine:
+    some_template(__env__=env, data=Symbol("new-input"))
+    runner.wake()  # runner processes the new fact immediately
+```
+
+`wake()` is:
+
+- **Latching**: if called before the runner reaches the wait point, the signal
+  is consumed on the next wait (no lost wakes).
+- **Idempotent**: multiple calls before consumption trigger one extra cycle.
+- **Harmless after close**: calling `wake()` on a closed runner does nothing.
+
 ## TimerEvent template
 
 The `TimerEvent` DSL template is defined in `clipspyx.dsl.timer` and
@@ -491,6 +513,7 @@ except GoalHandlerError as e:
 | `AsyncRunner(env)` | Async context manager for running goal handlers. Auto-enables goal handlers if not already enabled. |
 | `AsyncRunner.register_handler(template, handler)` | Register an async handler. The handler can be a coroutine function (one-shot) or an async generator function (persistent). Generators are automatically persistent: they maintain state across `run()` cycles. Coroutine handlers are one-shot and cancelled on loop exit. |
 | `AsyncRunner.run(limit, max_cycles)` | Run the async event loop. Returns `"completed"`, `"max_cycles"`, or `"halted"`. |
+| `AsyncRunner.wake()` | Interrupt a blocked handler wait and cycle back to `env.run()`. Latching and idempotent. |
 | `AsyncRunner.close()` | Cancel all tasks and disable goal handlers. Called automatically on context manager exit. |
 | `env.halt_async()` | Signal the run loop to stop after the current cycle. |
 

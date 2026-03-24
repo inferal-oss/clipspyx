@@ -1465,5 +1465,238 @@ class TestAsyncRunnerUnsatisfiedGoalBlackbox(unittest.TestCase):
         asyncio.run(drive())
 
 
+# ---------------------------------------------------------------------------
+# AsyncRunner wake tests
+# ---------------------------------------------------------------------------
+
+@unittest.skipUnless(CLIPS_70, "CLIPS 7.0+ required")
+class TestAsyncRunnerWake(unittest.TestCase):
+    def setUp(self):
+        self.env = Environment()
+
+    def test_wake_unblocks_wait(self):
+        """wake() interrupts a blocked _wait_for_handlers and lets run() cycle."""
+
+        class Probe(Template):
+            tag: Symbol
+
+        class ProbeResult(Template):
+            tag: Symbol
+
+        class HandleProbeGoal(Rule):
+            goal(Probe(tag=t))
+
+        class OnProbe(Rule):
+            p = Probe(tag=t)
+            asserts(ProbeResult(tag=t))
+
+        async def slow_handler(goal, env):
+            Probe(__env__=env, tag=Symbol("slow"))
+            yield                       # first gen step completes quickly
+            await asyncio.sleep(300)    # second gen step blocks
+            yield
+
+        runner = AsyncRunner(self.env)
+        self.env.define(Probe)
+        self.env.define(ProbeResult)
+        self.env.define(HandleProbeGoal)
+        self.env.define(OnProbe)
+        runner.register_handler(Probe, slow_handler)
+        self.env.reset()
+
+        async def drive():
+            # Run with max_cycles=3: cycle 1 dispatches & completes first
+            # gen step (quick), cycle 2 blocks in _wait on second gen step
+            # (sleeping 300s).
+            run_task = asyncio.create_task(runner.run(max_cycles=3))
+            await asyncio.sleep(0.1)    # let it reach _wait_for_handlers
+
+            # wake unblocks the wait; cycle 3 hits max_cycles → returns
+            runner.wake()
+            result = await asyncio.wait_for(run_task, timeout=2.0)
+            self.assertEqual(result, "max_cycles")
+
+            await runner.close()
+
+        asyncio.run(drive())
+
+    def test_wake_before_run(self):
+        """wake() called before run() is latched and consumed immediately."""
+
+        class Signal(Template):
+            tag: Symbol
+
+        class SignalResult(Template):
+            tag: Symbol
+
+        class HandleSignalGoal(Rule):
+            goal(Signal(tag=t))
+
+        class OnSignal(Rule):
+            s = Signal(tag=t)
+            asserts(SignalResult(tag=t))
+
+        async def long_handler(goal, env):
+            Signal(__env__=env, tag=Symbol("sig"))
+            yield                       # first gen step completes quickly
+            await asyncio.sleep(300)    # second gen step blocks
+            yield
+
+        runner = AsyncRunner(self.env)
+        self.env.define(Signal)
+        self.env.define(SignalResult)
+        self.env.define(HandleSignalGoal)
+        self.env.define(OnSignal)
+        runner.register_handler(Signal, long_handler)
+        self.env.reset()
+
+        async def drive():
+            # First run: cycle 1 dispatches & completes first gen step,
+            # cycle 2 hits max_cycles before blocking on second gen step.
+            r1 = await asyncio.wait_for(runner.run(max_cycles=2), timeout=2.0)
+            self.assertEqual(r1, "max_cycles")
+
+            # Wake BEFORE calling run — event is pre-set
+            runner.wake()
+            # max_cycles=2: cycle 1 does env.run(), then _wait_for_handlers
+            # sees the pre-set wake, returns None; cycle 2 hits max_cycles.
+            r2 = await asyncio.wait_for(runner.run(max_cycles=2), timeout=2.0)
+            self.assertEqual(r2, "max_cycles")
+
+            await runner.close()
+
+        asyncio.run(drive())
+
+    def test_wake_with_no_tasks(self):
+        """wake() with no pending tasks causes one extra cycle before completing."""
+
+        runner = AsyncRunner(self.env)
+
+        async def drive():
+            # Pre-set wake with no handlers registered
+            runner.wake()
+            # run() should cycle (env.run finds nothing) and complete
+            r = await asyncio.wait_for(runner.run(max_cycles=2), timeout=2.0)
+            self.assertEqual(r, "completed")
+            await runner.close()
+
+        asyncio.run(drive())
+
+    def test_wake_after_close(self):
+        """wake() after close() is harmless — no error raised."""
+
+        runner = AsyncRunner(self.env)
+
+        async def drive():
+            await runner.close()
+            runner.wake()  # should not raise
+
+        asyncio.run(drive())
+
+    def test_wake_simultaneous_with_handler(self):
+        """wake + handler completing at the same time: both are handled."""
+
+        class Item(Template):
+            tag: Symbol
+
+        class ItemResult(Template):
+            tag: Symbol
+
+        class HandleItemGoal(Rule):
+            goal(Item(tag=t))
+
+        class OnItem(Rule):
+            i = Item(tag=t)
+            asserts(ItemResult(tag=t))
+
+        handler_ran = []
+
+        async def quick_handler(goal, env):
+            handler_ran.append(1)
+            await asyncio.sleep(0.01)
+            Item(__env__=env, tag=Symbol("done"))
+            yield                       # first gen step completes fast
+            await asyncio.sleep(300)    # second gen step blocks
+            yield
+
+        runner = AsyncRunner(self.env)
+        self.env.define(Item)
+        self.env.define(ItemResult)
+        self.env.define(HandleItemGoal)
+        self.env.define(OnItem)
+        runner.register_handler(Item, quick_handler)
+        self.env.reset()
+
+        async def drive():
+            # Start run — handler dispatches and first gen step completes
+            r1 = await asyncio.wait_for(runner.run(max_cycles=2), timeout=2.0)
+            self.assertEqual(len(handler_ran), 1)
+
+            # Now handler is on second gen step (sleeping 300s).
+            # Wake and run concurrently — wake fires alongside the blocked handler.
+            run_task = asyncio.create_task(runner.run(max_cycles=2))
+            await asyncio.sleep(0.05)
+            runner.wake()
+            # Cycle 1: wake unblocks _wait; cycle 2: hits max_cycles.
+            r2 = await asyncio.wait_for(run_task, timeout=2.0)
+            self.assertEqual(r2, "max_cycles")
+
+            await runner.close()
+
+        asyncio.run(drive())
+
+    def test_wake_multiple_calls_idempotent(self):
+        """Multiple wake() calls before consumption trigger only one extra cycle."""
+
+        class Tick(Template):
+            tag: Symbol
+
+        class TickResult(Template):
+            tag: Symbol
+
+        class HandleTickGoal(Rule):
+            goal(Tick(tag=t))
+
+        class OnTick(Rule):
+            tk = Tick(tag=t)
+            asserts(TickResult(tag=t))
+
+        async def blocking_handler(goal, env):
+            Tick(__env__=env, tag=Symbol("t"))
+            yield                       # first gen step completes fast
+            await asyncio.sleep(300)    # second gen step blocks
+            yield
+
+        runner = AsyncRunner(self.env)
+        self.env.define(Tick)
+        self.env.define(TickResult)
+        self.env.define(HandleTickGoal)
+        self.env.define(OnTick)
+        runner.register_handler(Tick, blocking_handler)
+        self.env.reset()
+
+        async def drive():
+            # Start handler
+            r1 = await asyncio.wait_for(runner.run(max_cycles=2), timeout=2.0)
+
+            # Multiple wake calls — only one extra cycle should result
+            runner.wake()
+            runner.wake()
+            runner.wake()
+
+            run_task = asyncio.create_task(runner.run(max_cycles=3))
+            await asyncio.sleep(0.05)
+            # The pre-set wake is consumed on cycle 1's _wait_for_handlers.
+            # Cycle 2 blocks on the handler (no more wake events).
+            # We need to wake again to unblock cycle 2 so cycle 3 hits max.
+            runner.wake()
+            r2 = await asyncio.wait_for(run_task, timeout=2.0)
+            self.assertEqual(r2, "max_cycles")
+
+            await runner.close()
+
+        asyncio.run(drive())
+
+
 if __name__ == '__main__':
     unittest.main()

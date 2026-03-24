@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- `AsyncRunner.wake()` method: interrupts a blocked `_wait_for_handlers` wait,
+  causing the run loop to cycle back to `env.run()` immediately; safe to call
+  from any coroutine, latching (pre-set wake consumed on next wait), and
+  idempotent; enables external code to inject facts and have them processed
+  without waiting for an existing handler to complete
+
 ## [0.7.2] - 2026-03-23
 ### Added
 - `list[T]` type annotations on DSL template slots now work as multislots,

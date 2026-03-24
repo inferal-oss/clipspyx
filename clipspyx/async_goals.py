@@ -198,16 +198,20 @@ class AsyncRunner:
 
     Unlike the deprecated ``async_run()`` function, ``AsyncRunner`` owns the
     full goal handler lifecycle: it auto-enables on creation and disables on
-    ``close()``.  Persistent handler tasks survive when ``stop_event`` fires
+    ``close()``.  Persistent handler tasks survive across ``run()`` calls
     and are only cancelled by ``close()``.
+
+    Use :meth:`wake` to interrupt the handler wait and force the runner to
+    cycle back to ``env.run()``, e.g. after injecting facts externally.
 
     Usage::
 
         async with AsyncRunner(env) as runner:
-            runner.register_handler(MyTemplate, my_handler, persistent=True)
+            runner.register_handler(MyTemplate, my_handler)
             while not done:
-                work_ready.clear()
-                result = await runner.run(stop_event=work_ready)
+                # inject facts, then:
+                runner.wake()
+                result = await runner.run()
         # close() called automatically - all tasks cancelled, handlers disabled
     """
 
@@ -220,16 +224,26 @@ class AsyncRunner:
         self._generators = {}                 # task_id -> async generator
         self._closed = False
         self._skipped = set()                 # goal indices completed without satisfying
+        self._wake_event = asyncio.Event()
 
     def register_handler(self, template, handler):
         """Register an async handler for goals matching a template.
 
-        Regular async handlers (coroutines) are tracked per-goal and
-        cancelled when ``stop_event`` fires.  Async generator handlers
-        (functions with ``yield``) are tracked per-template and survive
-        across ``run()`` calls -- ``yield`` encodes persistence.
+        Regular async handlers (coroutines) are tracked per-goal.
+        Async generator handlers (functions with ``yield``) are tracked
+        per-template and survive across ``run()`` calls -- ``yield``
+        encodes persistence.
         """
         register_goal_handler(self.env, template, handler)
+
+    def wake(self):
+        """Signal the runner to cycle back to ``env.run()``.
+
+        Safe to call from any coroutine while the runner is blocked in
+        ``_wait_for_handlers``.  If called before the runner reaches the
+        wait point, the signal is latched and consumed on the next wait.
+        """
+        self._wake_event.set()
 
     # -- run() and its cycle steps --
 
@@ -351,20 +365,46 @@ class AsyncRunner:
                 self._skipped.discard(idx)
 
     async def _wait_for_handlers(self, state):
-        """Wait for at least one handler to complete.
+        """Wait for at least one handler to complete, or a wake signal.
 
-        Returns ``"completed"`` if no tasks remain, or ``None`` to
-        continue cycling.
+        Returns ``"completed"`` if no tasks remain (and no wake pending),
+        or ``None`` to continue cycling.
         """
         wait_set = set(state.pending.values()) | {
             t for t in self._persistent_tasks.values() if not t.done()
         }
+
+        # If nothing to wait on, check whether wake() was called.
         if not wait_set:
+            if self._wake_event.is_set():
+                self._wake_event.clear()
+                return None          # continue cycling
             return "completed"
 
-        done, _ = await asyncio.wait(
-            wait_set, return_when=asyncio.FIRST_COMPLETED)
-        self._process_done(state, done)
+        # Create a task that completes when wake() is called.
+        wake_task = asyncio.create_task(self._wake_event.wait())
+        wait_set.add(wake_task)
+
+        try:
+            done, _ = await asyncio.wait(
+                wait_set, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            wake_task.cancel()
+            try:
+                await wake_task
+            except asyncio.CancelledError:
+                pass
+
+        # Consume the wake signal if it fired.
+        woken = wake_task in done
+        if woken:
+            self._wake_event.clear()
+            done.discard(wake_task)
+
+        # Process any actual handler tasks that completed.
+        if done:
+            self._process_done(state, done)
+
         return None
 
     def _process_done(self, state, done):
@@ -428,6 +468,7 @@ class AsyncRunner:
         # Generator cleanup happens via task cancellation above
         self._generators.clear()
         self._skipped.clear()
+        self._wake_event.clear()
         disable_goal_handlers(self.env)
         self._closed = True
 
