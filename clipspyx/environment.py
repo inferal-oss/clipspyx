@@ -54,7 +54,8 @@ class Environment:
                  '_modules', '_functions', '_routers', '_tables',
                  '_namespaces', '_dsl_defs', '_ordering_pending',
                  '_tracing_state', '_goal_handler_state',
-                 '_fact_events_state')
+                 '_fact_events_state', '_periodic_functions',
+                 '_sigint_state')
 
     def __init__(self):
         self._env = lib.CreateEnvironment()
@@ -66,6 +67,8 @@ class Environment:
         self._tracing_state = None
         self._goal_handler_state = None
         self._fact_events_state = None
+        self._periodic_functions = {}
+        self._sigint_state = None
 
         self._facts = Facts(self._env)
         self._agenda = Agenda(self._env)
@@ -98,6 +101,9 @@ class Environment:
 
     def __del__(self):
         try:
+            if getattr(self, '_sigint_state', None) is not None:
+                from clipspyx.sigint import disable_sigint_handler
+                disable_sigint_handler(self)
             delete_environment_data(self._env)
             lib.DestroyEnvironment(self._env)
         except (AttributeError, KeyError, TypeError):
@@ -274,6 +280,50 @@ class Environment:
         """Create an AsyncRunner for this environment."""
         from clipspyx.async_goals import AsyncRunner
         return AsyncRunner(self)
+
+    # -- periodic functions --
+
+    def add_periodic_function(self, name, callback, priority=0):
+        """Register a callback invoked periodically during rule execution.
+
+        The callback receives ``(env,)`` as its single argument and must
+        not modify CLIPS data structures (read-only access only).
+
+        """
+        from clipspyx.periodic import add_periodic_function
+        add_periodic_function(self, name, callback, priority)
+
+    def remove_periodic_function(self, name):
+        """Remove a previously registered periodic callback."""
+        from clipspyx.periodic import remove_periodic_function
+        remove_periodic_function(self, name)
+
+    # -- SIGINT handling --
+
+    def enable_sigint_handler(self):
+        """Enable opt-in Ctrl-C (SIGINT) handling for ``run()``.
+
+        When enabled, pressing Ctrl-C during ``env.run()`` gracefully
+        halts CLIPS rule execution and raises ``KeyboardInterrupt``.
+        """
+        from clipspyx.sigint import enable_sigint_handler
+        enable_sigint_handler(self)
+
+    def disable_sigint_handler(self):
+        """Disable SIGINT handling for ``run()``."""
+        from clipspyx.sigint import disable_sigint_handler
+        disable_sigint_handler(self)
+
+    def sigint_handler(self):
+        """Context manager for scoped SIGINT handling.
+
+        Usage::
+
+            with env.sigint_handler():
+                env.run()
+        """
+        from clipspyx.sigint import sigint_handler
+        return sigint_handler(self)
 
     def clear(self):
         """Clear the CLIPS environment.

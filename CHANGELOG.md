@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Periodic callback API: `env.add_periodic_function(name, callback, priority)`
+  registers a Python callback invoked by CLIPS during rule execution (e.g. inside
+  `Run()`); useful for polling signals, progress indicators, or timeouts;
+  `env.remove_periodic_function(name)` unregisters it
+- Opt-in SIGINT (Ctrl-C) handling: `env.enable_sigint_handler()` /
+  `env.disable_sigint_handler()` and `with env.sigint_handler():` context
+  manager; pressing Ctrl-C during `env.run()` gracefully halts CLIPS execution
+  and raises `KeyboardInterrupt`; works with both sync `run()` and async
+  `AsyncRunner.run()`; supports multiple simultaneous environments
+
 ## [0.8.0] - 2026-03-24
 
 ### Added

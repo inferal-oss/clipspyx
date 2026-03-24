@@ -376,6 +376,7 @@ bool DeftemplateGetWatch(Deftemplate *);
 void DeftemplateSetWatch(Deftemplate *, bool);
 void FactPPForm(Fact *, StringBuilder *, bool);
 
+typedef void VoidCallFunction(Environment *, void *);
 typedef void VoidCallFunctionWithArg(Environment *, void *, void *);
 typedef void ModifyCallFunction(Environment *, Fact *, Fact *, void *);
 
@@ -624,6 +625,7 @@ extern "Python" void _tracing_on_modify(Environment *, Fact *, Fact *, void *);
 extern "Python" void _fact_event_on_assert(Environment *, void *, void *);
 extern "Python" void _fact_event_on_retract(Environment *, void *, void *);
 extern "Python" void _fact_event_on_modify(Environment *, Fact *, Fact *, void *);
+extern "Python" void _periodic_callback(Environment *, void *);
 bool AddRouter(Environment *, const char *, int, RouterQueryFunction *,
                RouterWriteFunction *, RouterReadFunction *,
                RouterUnreadFunction *, RouterExitFunction *, void *);
@@ -656,3 +658,13 @@ void ClearErrorValue(Environment *);
 int DefinePythonFunction(Environment *);
 extern "Python" static void python_function(Environment *, UDFContext *,
                                             UDFValue *);
+
+/***********************/
+/* Execution Control   */
+/***********************/
+
+bool AddPeriodicFunction(Environment *, const char *, VoidCallFunction *, int, void *);
+bool RemovePeriodicFunction(Environment *, const char *);
+void SetHaltExecution(Environment *, bool);
+bool GetHaltExecution(Environment *);
+void SetHaltRules(Environment *, bool);
