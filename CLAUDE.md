@@ -6,7 +6,7 @@ clipspyx: CLIPS Python bindings via CFFI. Fork of clipspy with a simplified buil
 
 ## Package Structure
 
-Four packages share version `0.1.0`:
+Four packages share version `0.10.0`:
 
 | Package | Location | Purpose |
 |---------|----------|---------|
