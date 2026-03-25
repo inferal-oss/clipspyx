@@ -24,6 +24,16 @@ VERSION_FILES = [
     ("backends/ffi-70x/pyproject.toml", re.compile(r'^(version\s*=\s*")([^"]+)(")', re.MULTILINE)),
 ]
 
+# Pinned dependency versions (clipspyx-ffi==X.Y.Z, clipspyx-ffi-64x==X.Y.Z, etc.)
+# These use replace_all because each file may contain multiple occurrences.
+PINNED_DEP_FILES = [
+    # (path relative to ROOT, pattern matching "clipspyx-ffi-NNx==VERSION")
+    ("pyproject.toml", re.compile(r"(clipspyx-ffi-(?:64|70)x==)(\d+\.\d+\.\d+)")),
+    # (path relative to ROOT, pattern matching "clipspyx-ffi==VERSION")
+    ("backends/ffi-64x/pyproject.toml", re.compile(r"(clipspyx-ffi==)(\d+\.\d+\.\d+)")),
+    ("backends/ffi-70x/pyproject.toml", re.compile(r"(clipspyx-ffi==)(\d+\.\d+\.\d+)")),
+]
+
 CHANGELOG = "CHANGELOG.md"
 UNRELEASED_RE = re.compile(r"^## \[Unreleased\]\s*\n\n*", re.MULTILINE)
 VERSION_HEADING_RE = re.compile(r"^## \[(\d+\.\d+\.\d+)\]", re.MULTILINE)
@@ -53,6 +63,33 @@ def bump_version_files(new_version: str, dry_run: bool) -> list[tuple[str, str, 
         if not dry_run:
             path.write_text(new_text)
         changes.append((relpath, old_version, new_version))
+    return changes
+
+
+def bump_pinned_deps(new_version: str, dry_run: bool) -> list[tuple[str, str, str]]:
+    """Update pinned dependency versions (e.g. clipspyx-ffi==X.Y.Z).
+
+    Returns list of (path, old, new) for files that changed.
+    """
+    changes = []
+    for relpath, pattern in PINNED_DEP_FILES:
+        path = ROOT / relpath
+        if not path.exists():
+            print(f"  SKIP {relpath} pins (not found)", file=sys.stderr)
+            continue
+        text = path.read_text()
+        m = pattern.search(text)
+        if not m:
+            print(f"  SKIP {relpath} pins (no match)", file=sys.stderr)
+            continue
+        old_version = m.group(2)
+        if old_version == new_version:
+            print(f"  SKIP {relpath} pins (already {new_version})")
+            continue
+        new_text = pattern.sub(rf"\g<1>{new_version}", text)
+        if not dry_run:
+            path.write_text(new_text)
+        changes.append((relpath + " (pinned deps)", old_version, new_version))
     return changes
 
 
@@ -135,6 +172,7 @@ def main():
     print(f"{label}Bumping to {version}\n")
 
     changes = bump_version_files(version, args.dry_run)
+    changes += bump_pinned_deps(version, args.dry_run)
     for relpath, old, new in changes:
         print(f"  {relpath}: {old} -> {new}")
 

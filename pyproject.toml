@@ -13,8 +13,8 @@ Repository = "https://github.com/inferal-oss/clipspyx"
 Issues = "https://github.com/inferal-oss/clipspyx/issues"
 
 [project.optional-dependencies]
-64x = ["clipspyx-ffi-64x==0.3.0"]
-70x = ["clipspyx-ffi-70x==0.3.0"]
+64x = ["clipspyx-ffi-64x==0.8.0"]
+70x = ["clipspyx-ffi-70x==0.8.0"]
 dsl = [
     "libcst>=1.0",
 ]
