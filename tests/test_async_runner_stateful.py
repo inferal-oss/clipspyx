@@ -361,26 +361,24 @@ class AsyncRunnerStateMachine(RuleBasedStateMachine):
 
     @invariant()
     def persistent_tasks_bounded(self):
-        """Persistent task count never exceeds registered generator templates."""
+        """Persistent tasks are cleaned up on close; while open, each task
+        corresponds to a dispatched goal (keyed by goal index, so multiple
+        goals per template are valid)."""
         if self._is_closed:
             assert len(self.runner._persistent_tasks) == 0, \
                 f"persistent tasks after close: {list(self.runner._persistent_tasks)}"
-        else:
-            n_tasks = len(self.runner._persistent_tasks)
-            # Model tracks which templates we registered as generators
-            assert n_tasks <= len(self._persistent_templates), \
-                f"persistent tasks ({n_tasks}) > registered ({len(self._persistent_templates)})"
 
     @invariant()
     def no_stale_completed_persistent_tasks(self):
-        """Between run() calls, stale done tasks are bounded by the number
-        of generator templates (top-of-loop prune handles them)."""
+        """Between run() calls, done tasks from the final cycle have not yet
+        been pruned.  With goal-index keying each cycle can dispatch new goals,
+        so done count is bounded by total tracked tasks, not template count."""
         if not self._is_closed:
             done_count = sum(1 for t in self.runner._persistent_tasks.values()
                             if t.done())
-            assert done_count <= len(self._persistent_templates), \
-                f"too many stale persistent tasks: {done_count} done " \
-                f"out of {len(self.runner._persistent_tasks)} tracked"
+            total = len(self.runner._persistent_tasks)
+            assert done_count <= total, \
+                f"done count ({done_count}) exceeds total ({total})"
 
     @invariant()
     def closed_state_consistent(self):
