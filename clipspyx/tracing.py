@@ -60,7 +60,7 @@ def _tracing_on_assert(env, fact_void, context_void):
         # Skip infrastructure facts to avoid infinite recursion
         tpl = lib.FactDeftemplate(fact_ptr)
         tpl_name = ffi.string(lib.DeftemplateName(tpl)).decode()
-        if tpl_name == "RuleFiring":
+        if tpl_name in ("RuleFiring", "RuleTriggered", "CycleDetected"):
             return
 
         lib.RetainFact(fact_ptr)

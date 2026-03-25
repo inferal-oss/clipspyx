@@ -13,6 +13,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   is keyed by goal index instead of template name
 
 ### Added
+- Loop detection via transitive closure of `RuleFiring` provenance:
+  `env.enable_loop_detection(threshold=3)` defines infrastructure rules that
+  compute causal chains between rules (A's output consumed by B's input) and
+  detect cycles of any length; a periodic callback counts firings for cycled
+  rules and raises `RuleLoopError` when the threshold is exceeded; requires
+  tracing to be enabled first
 - Periodic callback API: `env.add_periodic_function(name, callback, priority)`
   registers a Python callback invoked by CLIPS during rule execution (e.g. inside
   `Run()`); useful for polling signals, progress indicators, or timeouts;

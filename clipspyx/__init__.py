@@ -50,7 +50,8 @@ __all__ = ('CLIPSError',
            'Symbol',
            'InstanceName',
            'UniversallyQuantifiedValue',
-           'SaveMode')
+           'SaveMode',
+           'RuleLoopError')
 
 
 from clipspyx.environment import Environment
@@ -61,6 +62,7 @@ from clipspyx.facts import ImpliedFact, TemplateFact, Template
 from clipspyx.common import SaveMode, Strategy, SalienceEvaluation, Verbosity
 from clipspyx.common import CLIPSError, ClassDefaultMode, TemplateSlotDefaultType
 from clipspyx.common import CLIPS_MAJOR
+from clipspyx.loops import RuleLoopError
 
 if CLIPS_MAJOR >= 7:
     from clipspyx.tables import Deftable

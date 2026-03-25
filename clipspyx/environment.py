@@ -55,7 +55,7 @@ class Environment:
                  '_namespaces', '_dsl_defs', '_ordering_pending',
                  '_tracing_state', '_goal_handler_state',
                  '_fact_events_state', '_periodic_functions',
-                 '_sigint_state')
+                 '_sigint_state', '_loop_detection_state')
 
     def __init__(self):
         self._env = lib.CreateEnvironment()
@@ -69,6 +69,7 @@ class Environment:
         self._fact_events_state = None
         self._periodic_functions = {}
         self._sigint_state = None
+        self._loop_detection_state = None
 
         self._facts = Facts(self._env)
         self._agenda = Agenda(self._env)
@@ -101,6 +102,9 @@ class Environment:
 
     def __del__(self):
         try:
+            if getattr(self, '_loop_detection_state', None) is not None:
+                from clipspyx.loops import disable_loop_detection
+                disable_loop_detection(self)
             if getattr(self, '_sigint_state', None) is not None:
                 from clipspyx.sigint import disable_sigint_handler
                 disable_sigint_handler(self)
@@ -324,6 +328,25 @@ class Environment:
         """
         from clipspyx.sigint import sigint_handler
         return sigint_handler(self)
+
+    # -- Loop detection --
+
+    def enable_loop_detection(self, threshold=3):
+        """Enable causal loop detection for ``run()``.
+
+        Uses transitive closure of ``RuleFiring`` provenance to detect
+        cycles.  Raises ``RuleLoopError`` when a rule in a detected
+        cycle fires more than *threshold* times.
+
+        Requires tracing to be enabled first.
+        """
+        from clipspyx.loops import enable_loop_detection
+        enable_loop_detection(self, threshold=threshold)
+
+    def disable_loop_detection(self):
+        """Disable loop detection for ``run()``."""
+        from clipspyx.loops import disable_loop_detection
+        disable_loop_detection(self)
 
     def clear(self):
         """Clear the CLIPS environment.
