@@ -146,6 +146,9 @@ class ForwardRequest(Rule):
 For multislots, use `list[T]` or `Multi[T]`:
 
 ```python
+class Task(Template):
+    name: str
+
 class Batch(Template):
     tasks: list[Task]     # multislot of Task objects
 ```
@@ -183,7 +186,15 @@ env.reset()
 p = PersonAssert(name="Alice")
 DeptAssert(name="Engineering", head=p)  # OK: Person fact
 env.run()
+```
 
+Assigning a fact of the wrong template type raises `TypeError`:
+
+```python
+class Animal(Template):
+    species: str
+
+AnimalAssert = env.define(Animal)
 a = AnimalAssert(species="cat")
 DeptAssert(name="Engineering", head=a)  # TypeError on env.run()
 ```

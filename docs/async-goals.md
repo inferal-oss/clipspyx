@@ -333,7 +333,8 @@ runner.register_handler('fetch-request', fetch_handler)
 A handler is an async callable that receives a goal fact and the environment:
 
 ```python
-async def handler(goal, env)
+async def handler(goal, env):
+    ...
 ```
 
 - `goal`: a `TemplateFact` with slot access via `goal['slot_name']`
