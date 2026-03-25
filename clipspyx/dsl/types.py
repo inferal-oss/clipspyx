@@ -40,12 +40,18 @@ class Fact:
     pass
 
 
+class ExternalAddress:
+    """Sentinel type for EXTERNAL-ADDRESS slots/multislots."""
+    pass
+
+
 _TYPE_MAP = {
     int: 'INTEGER',
     float: 'FLOAT',
     str: 'STRING',
     Symbol: 'SYMBOL',
     Fact: 'FACT-ADDRESS',
+    ExternalAddress: 'EXTERNAL-ADDRESS',
 }
 
 

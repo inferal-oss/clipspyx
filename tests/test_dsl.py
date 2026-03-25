@@ -3087,6 +3087,45 @@ class TestExternalAddressSlots(unittest.TestCase):
     def setUp(self):
         self.env = Environment()
 
+    def test_external_address_annotation_ir(self):
+        """ExternalAddress annotation produces a typed EXTERNAL-ADDRESS slot."""
+        from clipspyx.dsl import ExternalAddress
+
+        class ExtIRTyped(Template):
+            ctx: ExternalAddress
+
+        slot = ExtIRTyped.__clipspyx_dsl__.slots[0]
+        self.assertEqual(slot.name, 'ctx')
+        self.assertEqual(slot.clips_type, 'EXTERNAL-ADDRESS')
+
+    def test_external_address_deftemplate_has_type_constraint(self):
+        """ExternalAddress slot generates (type EXTERNAL-ADDRESS) in deftemplate."""
+        from clipspyx.dsl import ExternalAddress
+
+        class ExtTypedTpl(Template):
+            ctx: ExternalAddress
+
+        code = generate_deftemplate(ExtTypedTpl.__clipspyx_dsl__)
+        self.assertIn('(type EXTERNAL-ADDRESS)', code)
+
+    def test_external_address_roundtrip(self):
+        """Python object round-trips through an ExternalAddress-typed slot."""
+        from clipspyx.dsl import ExternalAddress
+
+        class ExtTypedStore(Template):
+            ctx: ExternalAddress
+
+        self.env.define(ExtTypedStore)
+        self.env.reset()
+
+        obj = {'key': 'value'}
+        ExtTypedStore(__env__=self.env, ctx=obj)
+
+        tpl = self.env.find_template(ExtTypedStore.__clipspyx_dsl__.name)
+        facts = list(tpl.facts())
+        self.assertEqual(len(facts), 1)
+        self.assertIs(facts[0]['ctx'], obj)
+
     def test_object_type_annotation_ir(self):
         """object annotation produces an untyped slot (clips_type=None)."""
         class ExtIRObj(Template):

@@ -1,4 +1,4 @@
-from clipspyx.dsl.types import Multi, Fact
+from clipspyx.dsl.types import Multi, Fact, ExternalAddress
 from clipspyx.dsl.template import Template
 from clipspyx.dsl.rule import Rule, _Placeholder
 from clipspyx.dsl.timer import TimerEvent, AFTER, AT, EVERY
@@ -21,5 +21,5 @@ def concurrent(target):
 
 NIL = None
 
-__all__ = ['Template', 'Rule', 'Multi', 'Fact', 'NIL', 'before', 'after', 'concurrent',
-           'TimerEvent', 'AFTER', 'AT', 'EVERY']
+__all__ = ['Template', 'Rule', 'Multi', 'Fact', 'ExternalAddress', 'NIL',
+           'before', 'after', 'concurrent', 'TimerEvent', 'AFTER', 'AT', 'EVERY']
