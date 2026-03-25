@@ -164,11 +164,11 @@ Each cycle:
 Returns when no goals remain and no handlers are pending, when `max_cycles`
 is reached, or when `halt_async()` is called.
 
-### Waking the runner
+### Auto-wake
 
-When external code injects facts (e.g. from an API endpoint) while the runner
-is blocked waiting for handlers, call `wake()` to interrupt the wait and force
-the runner to cycle back to `env.run()`:
+Fact operations automatically wake the runner when it is blocked waiting for
+handlers. Any call to `assert_fact`, `assert_string`, `retract`, `modify_slots`,
+`update_slots`, or `load_facts` triggers a cycle back to `env.run()`:
 
 ```python
 async with AsyncRunner(env) as runner:
@@ -176,7 +176,24 @@ async with AsyncRunner(env) as runner:
 
     # Later, from another coroutine:
     some_template(__env__=env, data=Symbol("new-input"))
-    runner.wake()  # runner processes the new fact immediately
+    # No wake() needed -- the runner processes the new fact automatically
+```
+
+Auto-wake is suppressed in two cases to prevent spurious cycles:
+
+- **During rule execution** (`env.run()`): facts asserted by rule RHS actions
+  are already being processed by the current run.
+- **From within handler tasks**: handler completion already causes the runner
+  to cycle, so wakes from handler-internal fact operations are redundant.
+
+### Manual wake
+
+`wake()` is still available for cases not covered by auto-wake, such as
+modifying the environment through `env.eval()` or `env.reset()`:
+
+```python
+env.eval('(assert (signal (name external)))')
+runner.wake()  # env.eval goes through C, not caught by auto-wake
 ```
 
 `wake()` is:
@@ -583,7 +600,7 @@ except GoalHandlerError as e:
 | `AsyncRunner(env)` | Async context manager for running goal handlers. Auto-enables goal handlers if not already enabled. |
 | `AsyncRunner.register_handler(template, handler)` | Register an async handler. The handler can be a coroutine function (one-shot) or an async generator function (persistent). Generators are automatically persistent: they maintain state across `run()` cycles. Coroutine handlers are one-shot and cancelled on loop exit. |
 | `AsyncRunner.run(limit, max_cycles)` | Run the async event loop. Returns `"completed"`, `"max_cycles"`, or `"halted"`. |
-| `AsyncRunner.wake()` | Interrupt a blocked handler wait and cycle back to `env.run()`. Latching and idempotent. |
+| `AsyncRunner.wake()` | Manually interrupt a blocked handler wait and cycle back to `env.run()`. Latching and idempotent. Rarely needed: fact operations auto-wake the runner. Use for `env.eval()`, `env.reset()`, or other C-level changes. |
 | `AsyncRunner.close()` | Cancel all tasks and disable goal handlers. Called automatically on context manager exit. |
 | `env.halt_async()` | Signal the run loop to stop after the current cycle. |
 

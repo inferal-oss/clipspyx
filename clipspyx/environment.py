@@ -37,6 +37,7 @@ from clipspyx.functions import Functions
 from clipspyx.routers import Routers, ErrorRouter
 from clipspyx.common import CLIPSError, CLIPS_MAJOR
 from clipspyx.common import initialize_environment_data, delete_environment_data
+from clipspyx.common import register_environment, unregister_environment
 
 from clipspyx._clipspyx import lib
 
@@ -55,12 +56,16 @@ class Environment:
                  '_namespaces', '_dsl_defs', '_ordering_pending',
                  '_tracing_state', '_goal_handler_state',
                  '_fact_events_state', '_periodic_functions',
-                 '_sigint_state', '_loop_detection_state')
+                 '_sigint_state', '_loop_detection_state',
+                 '_runner_ref', '__weakref__')
 
     def __init__(self):
         self._env = lib.CreateEnvironment()
 
         initialize_environment_data(self._env)
+
+        self._runner_ref = None
+        register_environment(self._env, self)
 
         self._dsl_defs = []
         self._ordering_pending = {}
@@ -102,6 +107,7 @@ class Environment:
 
     def __del__(self):
         try:
+            unregister_environment(getattr(self, '_env', None))
             if getattr(self, '_loop_detection_state', None) is not None:
                 from clipspyx.loops import disable_loop_detection
                 disable_loop_detection(self)

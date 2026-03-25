@@ -27,6 +27,7 @@
 # OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
 # EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+import weakref
 from enum import IntEnum
 from collections import namedtuple
 
@@ -167,6 +168,7 @@ def initialize_environment_data(env: ffi.CData) -> 'EnvData':
 
 
 def delete_environment_data(env: ffi.CData):
+    unregister_environment(env)
     data = ENVIRONMENT_DATA.pop(env, None)
 
     if data is not None:
@@ -212,3 +214,36 @@ EnvModifiers = namedtuple('EnvModifiers', ('fact',
                                            'instance'))
 UserFunctions = namedtuple('UserFunctions', ('functions',
                                              'external_addresses'))
+
+# C env pointer -> weakref.ref(Environment) mapping
+_ENV_OBJECTS = {}
+
+
+def register_environment(env_ptr, env_obj):
+    """Register the Python Environment for a C env pointer."""
+    _ENV_OBJECTS[env_ptr] = weakref.ref(env_obj)
+
+
+def unregister_environment(env_ptr):
+    """Remove the Python Environment registration."""
+    _ENV_OBJECTS.pop(env_ptr, None)
+
+
+def notify_runner(env_ptr):
+    """Notify the active async runner that working memory changed.
+
+    Looks up the Python Environment from the C pointer, checks for an
+    active runner (weak ref), and calls wake() if alive.  No-op if no
+    runner is registered or the runner/env has been GC'd.
+    """
+    ref = _ENV_OBJECTS.get(env_ptr)
+    if ref is None:
+        return
+    env_obj = ref()
+    if env_obj is None:
+        return
+    runner_ref = env_obj._runner_ref
+    if runner_ref is not None:
+        runner = runner_ref()
+        if runner is not None:
+            runner._notify()

@@ -9,6 +9,7 @@ facts. Timers are the first built-in handler type.
 import asyncio
 import inspect
 import time as _time
+import weakref
 from dataclasses import dataclass, field
 
 from clipspyx.common import CLIPS_MAJOR
@@ -225,6 +226,8 @@ class AsyncRunner:
         self._closed = False
         self._skipped = set()                 # goal indices completed without satisfying
         self._wake_event = asyncio.Event()
+        self._in_env_run = False              # suppress notify during rule execution
+        self._handler_tasks = set()           # tracked handler asyncio.Tasks
 
     def register_handler(self, template, handler):
         """Register an async handler for goals matching a template.
@@ -243,6 +246,20 @@ class AsyncRunner:
         ``_wait_for_handlers``.  If called before the runner reaches the
         wait point, the signal is latched and consumed on the next wait.
         """
+        self._wake_event.set()
+
+    def _notify(self):
+        """Auto-wake from working memory changes (fact assert/retract/modify).
+
+        Suppressed during ``env.run()`` (rule-execution changes are already
+        being processed) and from within handler tasks (handler completion
+        already triggers cycling).
+        """
+        if self._in_env_run:
+            return
+        current = asyncio.current_task()
+        if current is not None and current in self._handler_tasks:
+            return
         self._wake_event.set()
 
     # -- run() and its cycle steps --
@@ -264,7 +281,11 @@ class AsyncRunner:
         if state is None:
             raise RuntimeError("Call enable_goal_handlers(env) first")
 
-        return await self._run_loop(state, limit, max_cycles)
+        self.env._runner_ref = weakref.ref(self)
+        try:
+            return await self._run_loop(state, limit, max_cycles)
+        finally:
+            self.env._runner_ref = None
 
     async def _run_loop(self, state, limit, max_cycles):
         """Core inference loop."""
@@ -279,7 +300,11 @@ class AsyncRunner:
             if state.halted:
                 return "halted"
 
-            self.env.run(limit)
+            self._in_env_run = True
+            try:
+                self.env.run(limit)
+            finally:
+                self._in_env_run = False
 
             if state.halted:
                 return "halted"
@@ -319,8 +344,11 @@ class AsyncRunner:
         if inspect.isasyncgen(invocation):
             task = asyncio.create_task(_gen_step(invocation))
             self._generators[id(task)] = invocation
+            self._handler_tasks.add(task)
             return task, True
-        return asyncio.create_task(invocation), False
+        task = asyncio.create_task(invocation)
+        self._handler_tasks.add(task)
+        return task, False
 
     def _dispatch_goals(self, state):
         """Scan CLIPS goals and create handler tasks for new ones.
@@ -427,6 +455,7 @@ class AsyncRunner:
             owners[id(t)] = (self._persistent_tasks, idx)
 
         for task in done:
+            self._handler_tasks.discard(task)
             owner = owners.get(id(task))
             gen = self._generators.pop(id(task), None)
 
@@ -445,6 +474,7 @@ class AsyncRunner:
             if gen and task.result() is not _EXHAUSTED:
                 new_task = asyncio.create_task(_gen_step(gen))
                 self._generators[id(new_task)] = gen
+                self._handler_tasks.add(new_task)
                 if owner: owner[0][owner[1]] = new_task
             else:
                 if owner:
@@ -463,6 +493,7 @@ class AsyncRunner:
         """
         if self._closed:
             return
+        self.env._runner_ref = None
         for task in self._persistent_tasks.values():
             task.cancel()
         self._persistent_tasks.clear()
@@ -473,6 +504,7 @@ class AsyncRunner:
             state.pending.clear()
         # Generator cleanup happens via task cancellation above
         self._generators.clear()
+        self._handler_tasks.clear()
         self._skipped.clear()
         self._wake_event.clear()
         disable_goal_handlers(self.env)

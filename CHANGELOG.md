@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Auto-wake: fact operations (`assert_fact`, `assert_string`, `retract`,
+  `modify_slots`, `update_slots`, `load_facts`) automatically wake the
+  `AsyncRunner` when a runner is active, eliminating the need for manual
+  `wake()` calls after injecting facts from external async code; suppressed
+  during rule execution (`env.run()`) and from within handler tasks to
+  prevent spurious cycles; uses weak references for zero-leak lifecycle
+
 ## [0.9.0] - 2026-03-24
 
 ### Fixed

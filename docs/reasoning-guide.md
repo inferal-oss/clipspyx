@@ -1651,6 +1651,12 @@ asyncio.run(main())
 The `async with` block handles the full lifecycle: enabling goal handlers,
 running the inference loop, and cleaning up all tasks on exit.
 
+While the runner is active, any fact operation from external async code
+(e.g. `assert_fact`, `retract`, `modify_slots`) automatically wakes the
+runner and triggers a new `env.run()` cycle. No manual `wake()` call is
+needed for the common case of injecting facts from coroutines, scheduled
+tasks, or server handlers.
+
 ### Waiting for specific rules to fire
 
 A common need: run the async loop until a particular rule produces its output,
@@ -1905,6 +1911,11 @@ runtime figures out how and when to produce them.
 The examples above show CLIPS reaching out (timers, HTTP fetches). The
 pattern works in reverse: external systems push facts **into** the `AsyncRunner`
 loop, turning the rule engine into the application's main event loop.
+
+Fact operations (`assert_fact`, `assert_string`, `retract`, `modify_slots`,
+`update_slots`, `load_facts`) **auto-wake** the runner: any code that asserts
+or modifies facts automatically interrupts the runner's wait and triggers a
+new `env.run()` cycle. No manual `runner.wake()` call is needed.
 
 The mechanism: an `asyncio.Queue` bridges an HTTP server to a goal handler.
 The server puts request dicts on the queue. The goal handler awaits them and

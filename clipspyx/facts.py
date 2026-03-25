@@ -48,6 +48,7 @@ from clipspyx.modules import Module
 from clipspyx.common import PutSlotError, PUT_SLOT_ERROR, CLIPS_MAJOR
 from clipspyx.common import environment_builder, environment_modifier
 from clipspyx.common import CLIPSError, SaveMode, TemplateSlotDefaultType
+from clipspyx.common import notify_runner
 
 from clipspyx._clipspyx import lib, ffi
 
@@ -108,6 +109,7 @@ class Fact:
         ret = lib.Retract(self._fact)
         if ret != lib.RE_NO_ERROR:
             raise CLIPSError(self._env, code=ret)
+        notify_runner(self._env)
 
 
 if CLIPS_MAJOR >= 7:
@@ -206,6 +208,7 @@ class TemplateFact(Fact):
 
         if lib.FMModify(modifier) is ffi.NULL:
             raise CLIPSError(self._env, code=lib.FBError(self._env))
+        notify_runner(self._env)
 
 
 if CLIPS_MAJOR >= 7:
@@ -234,6 +237,7 @@ if CLIPS_MAJOR >= 7:
         if fact is ffi.NULL:
             raise CLIPSError(self._env, code=lib.FMError(self._env))
 
+        notify_runner(self._env)
         return TemplateFact(self._env, fact)
 
     TemplateFact.update_slots = _update_slots
@@ -362,6 +366,7 @@ class Template:
 
         fact = lib.FBAssert(builder)
         if fact != ffi.NULL:
+            notify_runner(self._env)
             return TemplateFact(self._env, fact)
         else:
             raise CLIPSError(self._env, code=lib.FBError(self._env))
@@ -675,6 +680,7 @@ class Facts:
             raise CLIPSError(
                 self._env, code=lib.GetAssertStringError(self._env))
 
+        notify_runner(self._env)
         return new_fact(self._env, fact)
 
     def load_facts(self, facts: str):
@@ -693,6 +699,7 @@ class Facts:
         else:
             if not lib.LoadFactsFromString(self._env, facts, len(facts)):
                 raise CLIPSError(self._env)
+        notify_runner(self._env)
 
     def save_facts(self, path, mode=SaveMode.LOCAL_SAVE):
         """Save the facts in the system to the specified file.
