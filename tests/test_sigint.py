@@ -1,6 +1,5 @@
 """Tests for the opt-in SIGINT (Ctrl-C) handler."""
 
-import os
 import signal
 
 import clipspyx
@@ -57,7 +56,7 @@ class TestInterrupt:
         def send_sigint():
             if not sent[0]:
                 sent[0] = True
-                os.kill(os.getpid(), signal.SIGINT)
+                signal.raise_signal(signal.SIGINT)
 
         env.define_function(send_sigint)
         env.build(
@@ -83,7 +82,7 @@ class TestInterrupt:
         def send_sigint():
             if not sent[0]:
                 sent[0] = True
-                os.kill(os.getpid(), signal.SIGINT)
+                signal.raise_signal(signal.SIGINT)
 
         env.define_function(send_sigint)
         env.build(
@@ -128,7 +127,7 @@ class TestContextManager:
         def send_sigint():
             if not sent[0]:
                 sent[0] = True
-                os.kill(os.getpid(), signal.SIGINT)
+                signal.raise_signal(signal.SIGINT)
 
         env.define_function(send_sigint)
         env.build(
@@ -161,7 +160,7 @@ class TestMultipleEnvironments:
         try:
             assert len(_active_states) == 2
             # Simulate SIGINT.
-            os.kill(os.getpid(), signal.SIGINT)
+            signal.raise_signal(signal.SIGINT)
             assert env1._sigint_state.interrupted
             assert env2._sigint_state.interrupted
         finally:
