@@ -2237,7 +2237,10 @@ class TestHandlerStarvationResistance(unittest.TestCase):
         async def drive():
             async def external_task():
                 """Simulates a schedule_async coroutine."""
-                await asyncio.sleep(0.02)
+                # Use sleep(0) to avoid Windows timer resolution issues
+                # (15.6ms granularity).  The point is to verify external
+                # tasks get event loop time, not to test real-time delays.
+                await asyncio.sleep(0)
                 external_executed.append("done")
 
             # Create external task BEFORE run -- it must execute DURING run
