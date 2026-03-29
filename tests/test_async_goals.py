@@ -2326,5 +2326,54 @@ class TestHandlerStarvationResistance(unittest.TestCase):
             ["started", "step1", "step2", "completed"],
             f"External task starved by zero-sleep generator: {external_steps}")
 
+    def test_runner_schedule_executes_during_run(self):
+        """runner.schedule() tasks execute during run() and are included
+        in the wait set.  This is the safe alternative to
+        asyncio.get_event_loop().create_task() from CFFI callbacks."""
+
+        class Pulse(Template):
+            n: int
+
+        class HandlePulseGoal(Rule):
+            goal(Pulse(n=v))
+
+        class PulseResult(Template):
+            n: int
+
+        class OnPulse(Rule):
+            p = Pulse(n=v)
+            asserts(PulseResult(n=v))
+
+        async def pulse_gen(goal, env):
+            for i in range(5):
+                Pulse(__env__=env, n=i)
+                yield
+
+        self.env.define(Pulse)
+        self.env.define(PulseResult)
+        self.env.define(HandlePulseGoal)
+        self.env.define(OnPulse)
+        self.runner.register_handler(Pulse, pulse_gen)
+        self.env.reset()
+
+        schedule_results = []
+
+        async def drive():
+            async def scheduled_work():
+                await asyncio.sleep(0)
+                schedule_results.append("step1")
+                await asyncio.sleep(0)
+                schedule_results.append("done")
+
+            self.runner.schedule(scheduled_work())
+            await self.runner.run(max_cycles=20)
+            await self.runner.close()
+
+        asyncio.run(drive())
+
+        self.assertEqual(schedule_results, ["step1", "done"],
+                         "runner.schedule() task did not complete during run()")
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.10.4] - 2026-03-29
+
+### Added
+- `AsyncRunner.schedule(coro)`: schedule an external coroutine to run during
+  `run()` on the runner's event loop; safe to call from CLIPS rule actions
+  (CFFI callbacks) where `asyncio.get_event_loop()` may not return the correct
+  loop; tasks are added to the wait set and woken automatically
+
 ## [0.10.3] - 2026-03-29
 
 ### Fixed
@@ -240,7 +248,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `git apply` patch failure on Windows due to CRLF corruption ([989e154](https://github.com/inferal-oss/clipspyx/commit/989e154), [f95829d](https://github.com/inferal-oss/clipspyx/commit/f95829d))
 - Linux wheels rejected by PyPI due to `linux_x86_64` platform tag ([233faa3](https://github.com/inferal-oss/clipspyx/commit/233faa3))
 
-[Unreleased]: https://github.com/inferal-oss/clipspyx/compare/v0.10.3...HEAD
+[Unreleased]: https://github.com/inferal-oss/clipspyx/compare/v0.10.4...HEAD
+[0.10.4]: https://github.com/inferal-oss/clipspyx/compare/v0.10.3...v0.10.4
 [0.10.3]: https://github.com/inferal-oss/clipspyx/compare/v0.10.2...v0.10.3
 [0.10.2]: https://github.com/inferal-oss/clipspyx/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/inferal-oss/clipspyx/compare/v0.10.0...v0.10.1

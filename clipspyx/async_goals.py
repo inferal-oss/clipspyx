@@ -255,6 +255,24 @@ class AsyncRunner:
         """
         register_goal_handler(self.env, template, handler)
 
+    def schedule(self, coro):
+        """Schedule an external coroutine to run during ``run()``.
+
+        Creates an ``asyncio.Task`` on the runner's event loop and adds
+        it to the wait set so the run loop cycles when it completes.
+        Safe to call from CLIPS rule actions (CFFI callbacks) -- avoids
+        the ``asyncio.get_event_loop()`` ambiguity by using the loop
+        that the runner is actually running on.
+
+        The task is fire-and-forget: it is not tied to any goal and does
+        not block completion.  Errors are logged as warnings.
+        """
+        task = asyncio.create_task(coro)
+        self._orphaned_pending.add(task)
+        self._handler_tasks.add(task)
+        self._wake_event.set()
+        return task
+
     def wake(self):
         """Signal the runner to cycle back to ``env.run()``.
 
