@@ -125,6 +125,8 @@ SWARM_FEATURES = [
     "active_toggle",      # toggle the Active controlling fact
     "completing",         # persistent handlers complete quickly (vs loop forever)
     "wake",               # call runner.wake() at random times
+    "external_tasks",     # create asyncio tasks outside the runner (schedule_async)
+    "zero_sleep_gen",     # register a zero-sleep persistent generator (buffered WS)
 ]
 
 
@@ -148,11 +150,14 @@ class AsyncRunnerStateMachine(RuleBasedStateMachine):
         self._is_closed = False
         self._persistent_templates = set()
         self._has_nonpersistent = False
+        self._has_zero_sleep_gen = False
         self._run_count = 0
         self._last_result = None
         self._active_fact_exists = False
         self._halt_pending = False
         self._swarm = set()
+        # External task tracking: list of (task, run_count_at_creation)
+        self._external_tasks = []
 
     def teardown(self):
         if not self._is_closed and hasattr(self, 'runner'):
@@ -301,6 +306,56 @@ class AsyncRunnerStateMachine(RuleBasedStateMachine):
         """Call runner.wake() to interrupt blocked waits."""
         self.runner.wake()
 
+    @precondition(lambda self: (
+        not self._is_closed
+        and "zero_sleep_gen" in self._swarm
+        and not self._has_zero_sleep_gen
+        # Mutually exclusive with persistent_a (same template)
+        and SmStreamA.__clipspyx_dsl__.name not in self._persistent_templates
+    ))
+    @rule()
+    def register_zero_sleep_gen(self):
+        """Register a persistent generator that yields without sleeping.
+
+        Simulates a WebSocket handler with buffered messages -- the hardest
+        case for event loop fairness because __anext__() returns without
+        suspending.  Mutually exclusive with persistent_a (both use SmStreamA).
+        """
+        calls = self._handler_calls.setdefault("stream_a_zero", [])
+
+        async def zero_sleep_handler(goal, env):
+            calls.append(1)
+            for _ in range(20):
+                SmStreamA(__env__=env, tag=Symbol("zs"))
+                yield
+                # No sleep: simulates buffered WebSocket messages
+
+        self.runner.register_handler(SmStreamA, zero_sleep_handler)
+        self._persistent_templates.add(SmStreamA.__clipspyx_dsl__.name)
+        self._has_zero_sleep_gen = True
+
+    @precondition(lambda self: (
+        not self._is_closed
+        and "external_tasks" in self._swarm
+    ))
+    @rule(steps=st.integers(min_value=1, max_value=5))
+    def create_external_task(self, steps):
+        """Create an asyncio task outside the runner (schedule_async pattern).
+
+        The task does N sleep(0) yields, requiring N event loop iterations
+        to complete.  The invariant checks it finishes within a bounded
+        number of runner.run() calls.
+        """
+        result_box = []
+
+        async def external_work():
+            for _ in range(steps):
+                await asyncio.sleep(0)
+            result_box.append("done")
+
+        task = self._loop.create_task(external_work())
+        self._external_tasks.append((task, self._run_count, result_box))
+
     @precondition(lambda self: not self._is_closed)
     @rule(max_cyc=st.sampled_from([None, 1, 2, 3, 5, 10]))
     def do_run(self, max_cyc):
@@ -411,12 +466,140 @@ class AsyncRunnerStateMachine(RuleBasedStateMachine):
                     f"persistent task {name!r} was cancelled by halt"
 
     @invariant()
+    def external_tasks_not_starved(self):
+        """External asyncio tasks must complete within 3 run() calls.
+
+        If a task created via asyncio.create_task (outside the runner)
+        hasn't completed after 3 subsequent run() calls, the event loop
+        isn't giving it enough time -- i.e. it's being starved.
+        """
+        if "external_tasks" not in self._swarm:
+            return
+        grace_runs = 3
+        for task, created_at, result_box in self._external_tasks:
+            runs_since = self._run_count - created_at
+            if runs_since >= grace_runs and not task.done():
+                assert False, (
+                    f"External task created at run #{created_at} still pending "
+                    f"after {runs_since} runs (grace={grace_runs}). "
+                    f"Result: {result_box}. Task state: {task._state}"
+                )
+
+    @invariant()
     def max_cycles_preserves_persistent(self):
         """After 'max_cycles', persistent tasks are not cancelled."""
         if self._last_result == "max_cycles" and not self._is_closed:
             for name, task in self.runner._persistent_tasks.items():
                 assert not task.cancelled(), \
                     f"persistent task {name!r} was cancelled by max_cycles"
+
+
+# ---------------------------------------------------------------------------
+# Focused starvation state machine
+# ---------------------------------------------------------------------------
+
+@unittest.skipUnless(CLIPS_70, "CLIPS 7.0+ required")
+class ExternalTaskStarvationMachine(RuleBasedStateMachine):
+    """Focused property test for external task starvation.
+
+    Forces the critical swarm combination: zero-sleep persistent generator
+    + external asyncio tasks.  Exercises the exact scenario reported by the
+    py-sync-engine agent: schedule_async tasks must complete during
+    runner.run() even when a WebSocket-like generator yields without sleeping.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._loop = asyncio.new_event_loop()
+        self._run_count = 0
+        self._is_closed = False
+        self._external_tasks = []
+
+    def teardown(self):
+        if not self._is_closed and hasattr(self, 'runner'):
+            self._loop.run_until_complete(self.runner.close())
+        # Cancel lingering external tasks to suppress "Task destroyed" warnings
+        for task, _, _ in self._external_tasks:
+            if not task.done():
+                task.cancel()
+        self._loop.run_until_complete(asyncio.sleep(0))
+        self._loop.close()
+
+    @initialize()
+    def init_runner(self):
+        self.env = Environment()
+        self.runner = AsyncRunner(self.env)
+
+        self.env.define(SmStreamA)
+        self.env.define(SmStreamAResult)
+        self.env.define(SmActive)
+        self.env.define(_make_stream_a_goal())
+        self.env.define(_make_stream_a_consumer())
+        self.env.reset()
+
+        # Always register the zero-sleep generator
+        async def zero_sleep_handler(goal, env):
+            for _ in range(30):
+                SmStreamA(__env__=env, tag=Symbol("zs"))
+                yield  # no sleep: buffered WebSocket pattern
+
+        self.runner.register_handler(SmStreamA, zero_sleep_handler)
+
+        # Always assert Active so the consumer rule fires
+        SmActive(__env__=self.env)
+
+    @rule(steps=st.integers(min_value=1, max_value=5))
+    def create_external_task(self, steps):
+        """Create an external asyncio task requiring N event loop iterations."""
+        result_box = []
+
+        async def work():
+            for _ in range(steps):
+                await asyncio.sleep(0)
+            result_box.append("done")
+
+        task = self._loop.create_task(work())
+        self._external_tasks.append((task, self._run_count, result_box))
+
+    @rule(max_cyc=st.sampled_from([2, 3, 5, 10]))
+    def do_run(self, max_cyc):
+        """Run the runner with the zero-sleep generator active."""
+        if self._is_closed:
+            return
+
+        async def _run():
+            try:
+                return await asyncio.wait_for(
+                    self.runner.run(max_cycles=max_cyc),
+                    timeout=3.0,
+                )
+            except asyncio.TimeoutError:
+                return "timeout"
+
+        result = self._loop.run_until_complete(_run())
+        self._run_count += 1
+        assert result != "timeout", "run() timed out"
+
+    @rule()
+    def do_close(self):
+        """Close the runner."""
+        if self._is_closed:
+            return
+        self._loop.run_until_complete(self.runner.close())
+        self._is_closed = True
+
+    @invariant()
+    def external_tasks_not_starved(self):
+        """External tasks must complete within 3 run() calls."""
+        grace = 3
+        for task, created_at, result_box in self._external_tasks:
+            runs_since = self._run_count - created_at
+            if runs_since >= grace and not task.done():
+                assert False, (
+                    f"STARVED: external task (created at run #{created_at}) "
+                    f"still pending after {runs_since} runs. "
+                    f"Result: {result_box}"
+                )
 
 
 # -- Test configuration --
@@ -426,6 +609,14 @@ if CLIPS_70:
     AsyncRunnerTest.settings = settings(
         max_examples=200,
         stateful_step_count=30,
+        deadline=15000,
+        suppress_health_check=[HealthCheck.too_slow],
+    )
+
+    StarvationTest = ExternalTaskStarvationMachine.TestCase
+    StarvationTest.settings = settings(
+        max_examples=300,
+        stateful_step_count=40,
         deadline=15000,
         suppress_health_check=[HealthCheck.too_slow],
     )

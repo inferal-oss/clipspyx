@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-03-29
+
+### Fixed
+- External async tasks created outside the runner (e.g. `schedule_async`
+  coroutines from rule actions) were starved while `runner.run()` was active;
+  `_run_loop` now yields to the event loop between cycles, giving external
+  tasks a chance to execute
+
+### Changed
+- `_timer_every` now retracts the previous timer-event fact before asserting
+  the next one (instead of on generator re-step via `finally`); this ensures
+  timer facts survive event-loop yields between cycles so `env.run()` can
+  see them
+
 ## [0.10.2] - 2026-03-29
 
 ### Fixed
@@ -226,7 +240,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `git apply` patch failure on Windows due to CRLF corruption ([989e154](https://github.com/inferal-oss/clipspyx/commit/989e154), [f95829d](https://github.com/inferal-oss/clipspyx/commit/f95829d))
 - Linux wheels rejected by PyPI due to `linux_x86_64` platform tag ([233faa3](https://github.com/inferal-oss/clipspyx/commit/233faa3))
 
-[Unreleased]: https://github.com/inferal-oss/clipspyx/compare/v0.10.2...HEAD
+[Unreleased]: https://github.com/inferal-oss/clipspyx/compare/v0.10.3...HEAD
+[0.10.3]: https://github.com/inferal-oss/clipspyx/compare/v0.10.2...v0.10.3
 [0.10.2]: https://github.com/inferal-oss/clipspyx/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/inferal-oss/clipspyx/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/inferal-oss/clipspyx/compare/v0.9.0...v0.10.0

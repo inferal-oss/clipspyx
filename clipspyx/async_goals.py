@@ -114,27 +114,33 @@ async def _timer_oneshot(goal, env):
 async def _timer_every(goal, env):
     """Handle periodic timer-event goals (async generator).
 
-    Each iteration sleeps, asserts the fact, and yields.  The fact is
-    scoped to the yield via try/finally: it is retracted when the
-    generator resumes (normal) or is cancelled (close/exception).
+    Each iteration sleeps, then retracts the previous fact (if any) and
+    asserts a new one before yielding.  The fact persists until the next
+    timer tick, ensuring ``env.run()`` sees it even when generator
+    re-steps run between cycles (e.g. during an event-loop yield in
+    ``_run_loop``).  On cancellation the ``finally`` block cleans up the
+    last fact.
     """
     name = str(goal['name'])
     seconds = float(goal['seconds'])
     tpl = env.find_template('timer-event')
 
     count = 0
-    while True:
-        await asyncio.sleep(seconds)
-        fact = tpl.assert_fact(
-            kind=Symbol('every'), name=Symbol(name),
-            seconds=seconds, time=0.0,
-            count=count, fired_at=_time.time())
-        try:
-            yield
-        finally:
-            if fact.exists:
+    fact = None
+    try:
+        while True:
+            await asyncio.sleep(seconds)
+            if fact is not None and fact.exists:
                 fact.retract()
-        count += 1
+            fact = tpl.assert_fact(
+                kind=Symbol('every'), name=Symbol(name),
+                seconds=seconds, time=0.0,
+                count=count, fired_at=_time.time())
+            yield
+            count += 1
+    finally:
+        if fact is not None and fact.exists:
+            fact.retract()
 
 
 
@@ -331,6 +337,14 @@ class AsyncRunner:
             reason = await self._wait_for_handlers(state)
             if reason is not None:
                 return reason
+
+            # Yield to the event loop between cycles so that external
+            # async tasks (e.g. schedule_async coroutines created by
+            # rule actions via asyncio.create_task) get a chance to
+            # execute.  Safe for timer facts because _timer_every now
+            # retracts the previous fact before asserting the next one
+            # (not on re-step via finally).
+            await asyncio.sleep(0)
 
         return "max_cycles"
 

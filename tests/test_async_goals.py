@@ -2253,6 +2253,78 @@ class TestHandlerStarvationResistance(unittest.TestCase):
         self.assertEqual(external_executed, ["done"],
                          "External async task did not execute during run()")
 
+    def test_external_task_runs_with_zero_sleep_generator(self):
+        """External asyncio task completes even when the persistent generator
+        yields without sleeping (simulating buffered WebSocket messages).
+
+        This is the hardest case for the event loop: the generator's
+        __anext__() returns immediately (no suspension), so _gen_step can
+        complete within a single event loop callback.  Without the
+        sleep(0) in _run_loop, asyncio.wait returns instantly and
+        external tasks are starved.
+        """
+
+        class Stream(Template):
+            seq: int
+
+        class HandleStreamGoal(Rule):
+            goal(Stream(seq=n))
+
+        class StreamResult(Template):
+            seq: int
+
+        class OnStream(Rule):
+            s = Stream(seq=n)
+            asserts(StreamResult(seq=n))
+
+        messages_yielded = []
+
+        async def stream_gen(goal, env):
+            """Generator that yields immediately (no sleep) -- simulates
+            a WebSocket with buffered messages."""
+            for i in range(10):
+                Stream(__env__=env, seq=i)
+                messages_yielded.append(i)
+                yield
+                # No sleep between yields: __anext__() returns instantly
+                # when resumed.
+
+        self.env.define(Stream)
+        self.env.define(StreamResult)
+        self.env.define(HandleStreamGoal)
+        self.env.define(OnStream)
+        self.runner.register_handler(Stream, stream_gen)
+        self.env.reset()
+
+        external_steps = []
+
+        async def drive():
+            async def multi_step_task():
+                """External task that needs multiple event loop iterations.
+                Simulates a schedule_async coroutine (e.g. HTTP request)."""
+                external_steps.append("started")
+                await asyncio.sleep(0)  # 1st yield
+                external_steps.append("step1")
+                await asyncio.sleep(0)  # 2nd yield
+                external_steps.append("step2")
+                await asyncio.sleep(0)  # 3rd yield
+                external_steps.append("completed")
+
+            asyncio.create_task(multi_step_task())
+            await self.runner.run(max_cycles=30)
+            await self.runner.close()
+
+        asyncio.run(drive())
+
+        # Generator must have yielded (proves it was active)
+        self.assertGreater(len(messages_yielded), 0,
+                           "Generator never yielded")
+
+        # External task must have completed ALL steps during run()
+        self.assertEqual(
+            external_steps,
+            ["started", "step1", "step2", "completed"],
+            f"External task starved by zero-sleep generator: {external_steps}")
 
 if __name__ == '__main__':
     unittest.main()
