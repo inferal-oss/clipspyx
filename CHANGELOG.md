@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-03-28
+
+### Fixed
+- Persistent async generator handlers (e.g. WebSocket ingress) could starve
+  non-persistent coroutine handlers (e.g. HTTP response); two fixes applied:
+  `_gen_step` now yields to the event loop after each generator advance to
+  prevent I/O starvation, and retracted-goal handlers are detached to an
+  orphaned set instead of cancelled, allowing in-flight work to complete
+
 ## [0.10.0] - 2026-03-25
 
 ### Added
