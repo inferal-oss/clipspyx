@@ -2195,6 +2195,61 @@ class TestHandlerStarvationResistance(unittest.TestCase):
 
         asyncio.run(drive())
 
+    def test_external_async_task_executes_during_run(self):
+        """asyncio.create_task() tasks created outside the runner execute
+        during runner.run(), not only after it returns.
+
+        Models the schedule_async pattern: a rule action creates a plain
+        asyncio task (not a goal handler) that must run while the runner
+        is active.  Without the event loop yield in _wait_for_handlers,
+        these tasks would be starved by a fast persistent generator.
+        """
+
+        class Pulse(Template):
+            n: int
+
+        class HandlePulseGoal(Rule):
+            goal(Pulse(n=v))
+
+        class PulseResult(Template):
+            n: int
+
+        class OnPulse(Rule):
+            p = Pulse(n=v)
+            asserts(PulseResult(n=v))
+
+        async def pulse_gen(goal, env):
+            """Fast generator: yields rapidly."""
+            for i in range(5):
+                await asyncio.sleep(0.01)
+                Pulse(__env__=env, n=i)
+                yield
+
+        self.env.define(Pulse)
+        self.env.define(PulseResult)
+        self.env.define(HandlePulseGoal)
+        self.env.define(OnPulse)
+        self.runner.register_handler(Pulse, pulse_gen)
+        self.env.reset()
+
+        external_executed = []
+
+        async def drive():
+            async def external_task():
+                """Simulates a schedule_async coroutine."""
+                await asyncio.sleep(0.02)
+                external_executed.append("done")
+
+            # Create external task BEFORE run -- it must execute DURING run
+            asyncio.create_task(external_task())
+            await self.runner.run(max_cycles=20)
+            await self.runner.close()
+
+        asyncio.run(drive())
+
+        self.assertEqual(external_executed, ["done"],
+                         "External async task did not execute during run()")
+
 
 if __name__ == '__main__':
     unittest.main()

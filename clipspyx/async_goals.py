@@ -428,6 +428,14 @@ class AsyncRunner:
         Returns ``"completed"`` if no tasks remain (and no wake pending),
         or ``None`` to continue cycling.
         """
+        # Yield to the event loop so external async tasks (e.g.
+        # schedule_async coroutines created by rule actions) get a
+        # chance to execute.  Placed here (after env.run()) rather
+        # than at the end of the cycle to preserve fact visibility:
+        # generator re-steps that retract scoped facts must not run
+        # before the next env.run() sees those facts.
+        await asyncio.sleep(0)
+
         wait_set = set(state.pending.values()) | {
             t for t in self._persistent_tasks.values() if not t.done()
         } | {
