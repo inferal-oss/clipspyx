@@ -2089,5 +2089,112 @@ class TestMultiTimerDispatch(unittest.TestCase):
         self.assertGreaterEqual(len(every_facts), 1, "every-timer never fired")
 
 
+# ---------------------------------------------------------------------------
+# Starvation resistance tests (orphaned pending tasks)
+# ---------------------------------------------------------------------------
+
+@unittest.skipUnless(CLIPS_70, "CLIPS 7.0+ required")
+class TestHandlerStarvationResistance(unittest.TestCase):
+    """Prove that a persistent generator handler does not starve a coroutine
+    handler whose goal is repeatedly retracted and re-created.
+
+    Models the scenario: a fast generator toggles a control fact, causing the
+    coroutine handler's goal-generating rule to deactivate and re-activate.
+    Without the orphaned-pending fix, the coroutine handler would be cancelled
+    on every goal retraction and never complete.
+    """
+
+    def setUp(self):
+        self.env = Environment()
+        self.runner = AsyncRunner(self.env)
+
+    def test_coroutine_completes_despite_goal_toggling(self):
+        """Coroutine handler completes even when its goal is retracted
+        and re-created by generator-triggered rule changes."""
+
+        class Pulse(Template):
+            n: int
+
+        class PulseResult(Template):
+            n: int
+
+        class SlowOp(Template):
+            key: Symbol
+
+        class SlowResult(Template):
+            key: Symbol
+
+        # Goal-generating rules
+        class HandlePulseGoal(Rule):
+            goal(Pulse(n=v))
+
+        class HandleSlowGoal(Rule):
+            goal(SlowOp(key=k))
+
+        # The slow rule needs SlowOp -- backward chain generates the goal.
+        class OnSlowDone(Rule):
+            s = SlowOp(key=k)
+            asserts(SlowResult(key=k))
+
+        # The pulse rule consumes pulse facts.
+        class OnPulse(Rule):
+            p = Pulse(n=v)
+            asserts(PulseResult(n=v))
+
+        handler_completions = []
+
+        async def pulse_gen(goal, env):
+            """Fast generator: yields rapidly, simulating a WebSocket feed."""
+            for i in range(5):
+                await asyncio.sleep(0.01)
+                Pulse(__env__=env, n=i)
+                yield
+
+        async def slow_handler(goal, env):
+            """Slow coroutine: simulates an HTTP request."""
+            await asyncio.sleep(0.05)
+            SlowOp(__env__=env, key=Symbol("done"))
+            handler_completions.append(True)
+
+        self.env.define(Pulse)
+        self.env.define(PulseResult)
+        self.env.define(SlowOp)
+        self.env.define(SlowResult)
+        self.env.define(HandlePulseGoal)
+        self.env.define(HandleSlowGoal)
+        self.env.define(OnPulse)
+        self.env.define(OnSlowDone)
+        self.runner.register_handler(Pulse, pulse_gen)
+        self.runner.register_handler(SlowOp, slow_handler)
+        self.env.reset()
+
+        async def drive():
+            result = await self.runner.run(max_cycles=50)
+            await self.runner.close()
+            return result
+
+        asyncio.run(drive())
+
+        # The slow handler must have completed at least once
+        self.assertGreaterEqual(len(handler_completions), 1,
+                                "Slow handler was starved by generator")
+
+        # SlowResult must have been asserted
+        srname = SlowResult.__clipspyx_dsl__.name
+        results = list(self.env.find_template(srname).facts())
+        self.assertGreaterEqual(len(results), 1,
+                                "SlowResult never asserted")
+
+    def test_orphaned_task_cleaned_on_close(self):
+        """Orphaned pending tasks are cleaned up when the runner is closed."""
+        async def drive():
+            # Just run and close -- verify _orphaned_pending is empty
+            await self.runner.run(max_cycles=1)
+            await self.runner.close()
+            self.assertEqual(len(self.runner._orphaned_pending), 0)
+
+        asyncio.run(drive())
+
+
 if __name__ == '__main__':
     unittest.main()

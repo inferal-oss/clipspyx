@@ -9,6 +9,7 @@ facts. Timers are the first built-in handler type.
 import asyncio
 import inspect
 import time as _time
+import warnings
 import weakref
 from dataclasses import dataclass, field
 
@@ -59,9 +60,17 @@ _EXHAUSTED = object()
 
 
 async def _gen_step(agen):
-    """Advance an async generator by one step."""
+    """Advance an async generator by one step.
+
+    The ``sleep(0)`` after ``__anext__`` yields to the event loop before
+    the task completes, ensuring that I/O callbacks for other handlers
+    (HTTP responses, etc.) are processed even when the generator has
+    buffered data and ``__anext__`` returns without suspending.
+    """
     try:
-        return await agen.__anext__()
+        result = await agen.__anext__()
+        await asyncio.sleep(0)
+        return result
     except StopAsyncIteration:
         return _EXHAUSTED
 
@@ -225,6 +234,7 @@ class AsyncRunner:
         self._generators = {}                 # task_id -> async generator
         self._closed = False
         self._skipped = set()                 # goal indices completed without satisfying
+        self._orphaned_pending = set()        # detached tasks (goal retracted mid-flight)
         self._wake_event = asyncio.Event()
         self._in_env_run = False              # suppress notify during rule execution
         self._handler_tasks = set()           # tracked handler asyncio.Tasks
@@ -296,6 +306,7 @@ class AsyncRunner:
             cycle += 1
 
             self._prune_done_persistent()
+            self._prune_done_orphaned()
 
             if state.halted:
                 return "halted"
@@ -310,7 +321,7 @@ class AsyncRunner:
                 return "halted"
 
             self._dispatch_goals(state)
-            self._cancel_retracted_goals(state)
+            self._detach_retracted_goals(state)
 
             if not state.pending and not self._has_active_persistent():
                 return "completed"
@@ -328,6 +339,18 @@ class AsyncRunner:
         for idx in [i for i, t in self._persistent_tasks.items()
                     if t.done()]:
             del self._persistent_tasks[idx]
+
+    def _prune_done_orphaned(self):
+        """Remove completed orphaned tasks, logging any errors."""
+        for task in list(self._orphaned_pending):
+            if task.done():
+                self._orphaned_pending.discard(task)
+                self._handler_tasks.discard(task)
+                if not task.cancelled() and task.exception():
+                    warnings.warn(
+                        f"Orphaned handler failed: {task.exception()}",
+                        stacklevel=1,
+                    )
 
     def _has_active_persistent(self):
         """True if any persistent task is still running."""
@@ -374,10 +397,14 @@ class AsyncRunner:
             else:
                 state.pending[idx] = task
 
-    def _cancel_retracted_goals(self, state):
-        """Cancel non-persistent tasks whose goals no longer exist.
+    def _detach_retracted_goals(self, state):
+        """Detach non-persistent tasks whose goals no longer exist.
 
-        Persistent tasks (_persistent_tasks) are intentionally NOT cancelled
+        Tasks are moved to ``_orphaned_pending`` instead of cancelled,
+        allowing in-flight work (HTTP requests, etc.) to complete.
+        Orphaned tasks do not block completion.
+
+        Persistent tasks (_persistent_tasks) are intentionally NOT touched
         here.  In CLIPS backward chaining, a goal is retracted when satisfied
         (fact asserted), but the generator handler must keep running for
         subsequent iterations (e.g. every-timer ticks).
@@ -387,10 +414,7 @@ class AsyncRunner:
                 self.env.find_goal(idx)
             except LookupError:
                 task = state.pending.pop(idx)
-                task.cancel()
-                gen = self._generators.pop(id(task), None)
-                if gen is not None:
-                    asyncio.create_task(gen.aclose())
+                self._orphaned_pending.add(task)
 
         for idx in list(self._skipped):
             try:
@@ -406,6 +430,8 @@ class AsyncRunner:
         """
         wait_set = set(state.pending.values()) | {
             t for t in self._persistent_tasks.values() if not t.done()
+        } | {
+            t for t in self._orphaned_pending if not t.done()
         }
 
         # If nothing to wait on, check whether wake() was called.
@@ -456,6 +482,17 @@ class AsyncRunner:
 
         for task in done:
             self._handler_tasks.discard(task)
+
+            # Orphaned tasks: just clean up, don't propagate errors.
+            if task in self._orphaned_pending:
+                self._orphaned_pending.discard(task)
+                if not task.cancelled() and task.exception():
+                    warnings.warn(
+                        f"Orphaned handler failed: {task.exception()}",
+                        stacklevel=1,
+                    )
+                continue
+
             owner = owners.get(id(task))
             gen = self._generators.pop(id(task), None)
 
@@ -502,6 +539,9 @@ class AsyncRunner:
             for task in state.pending.values():
                 task.cancel()
             state.pending.clear()
+        for task in self._orphaned_pending:
+            task.cancel()
+        self._orphaned_pending.clear()
         # Generator cleanup happens via task cancellation above
         self._generators.clear()
         self._handler_tasks.clear()

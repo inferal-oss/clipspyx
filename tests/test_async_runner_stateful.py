@@ -387,6 +387,7 @@ class AsyncRunnerStateMachine(RuleBasedStateMachine):
             assert self.runner._closed is True
             assert self.env._goal_handler_state is None
             assert len(self.runner._persistent_tasks) == 0
+            assert len(self.runner._orphaned_pending) == 0
 
     @invariant()
     def completed_means_no_active_tasks(self):
