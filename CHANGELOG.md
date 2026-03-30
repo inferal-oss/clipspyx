@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.10.6] - 2026-03-30
+
+### Fixed
+- Non-persistent coroutine handlers (e.g. HTTP executor) starved when a
+  persistent generator completed outside `asyncio.wait`; the done gen_step
+  task in the wait set caused `asyncio.wait` to return without yielding;
+  done gen_steps are now re-stepped in `_restep_done_generators` before
+  building the wait set, so `asyncio.wait` only sees pending tasks
+- Async HTTP handlers (httpx, aiohttp) stalled because `env.run()` blocked
+  the event loop for the entire duration of rule execution; httpx connection
+  setup needs many event loop iterations (socket → connect → TLS → request)
+  but got none until all rules finished; `env.run()` now executes in batches
+  (`run_batch_size`, default 10), yielding to the event loop between batches
+
+### Changed
+- `AsyncRunner` constructor accepts `run_batch_size` keyword argument
+  (default 10) controlling how many CLIPS rules fire before yielding to the
+  event loop; set to `None` to disable batching (original behavior)
+- Removed `io_yield_cycles` and `io_min_poll` parameters (superseded by
+  batched `env.run()` which provides I/O time during rule execution, not
+  just between cycles)
+  `ProactorEventLoop`
+
 ## [0.10.5] - 2026-03-30
 
 ### Fixed
@@ -271,7 +294,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `git apply` patch failure on Windows due to CRLF corruption ([989e154](https://github.com/inferal-oss/clipspyx/commit/989e154), [f95829d](https://github.com/inferal-oss/clipspyx/commit/f95829d))
 - Linux wheels rejected by PyPI due to `linux_x86_64` platform tag ([233faa3](https://github.com/inferal-oss/clipspyx/commit/233faa3))
 
-[Unreleased]: https://github.com/inferal-oss/clipspyx/compare/v0.10.5...HEAD
+[Unreleased]: https://github.com/inferal-oss/clipspyx/compare/v0.10.6...HEAD
+[0.10.6]: https://github.com/inferal-oss/clipspyx/compare/v0.10.5...v0.10.6
 [0.10.5]: https://github.com/inferal-oss/clipspyx/compare/v0.10.4...v0.10.5
 [0.10.4]: https://github.com/inferal-oss/clipspyx/compare/v0.10.3...v0.10.4
 [0.10.3]: https://github.com/inferal-oss/clipspyx/compare/v0.10.2...v0.10.3

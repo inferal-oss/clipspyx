@@ -1495,7 +1495,7 @@ class TestAsyncRunnerWake(unittest.TestCase):
             await asyncio.sleep(300)    # second gen step blocks
             yield
 
-        runner = AsyncRunner(self.env)
+        runner = AsyncRunner(self.env, run_batch_size=None)
         self.env.define(Probe)
         self.env.define(ProbeResult)
         self.env.define(HandleProbeGoal)
@@ -1541,7 +1541,7 @@ class TestAsyncRunnerWake(unittest.TestCase):
             await asyncio.sleep(300)    # second gen step blocks
             yield
 
-        runner = AsyncRunner(self.env)
+        runner = AsyncRunner(self.env, run_batch_size=None)
         self.env.define(Signal)
         self.env.define(SignalResult)
         self.env.define(HandleSignalGoal)
@@ -1618,7 +1618,7 @@ class TestAsyncRunnerWake(unittest.TestCase):
             await asyncio.sleep(300)    # second gen step blocks
             yield
 
-        runner = AsyncRunner(self.env)
+        runner = AsyncRunner(self.env, run_batch_size=None)
         self.env.define(Item)
         self.env.define(ItemResult)
         self.env.define(HandleItemGoal)
@@ -2464,6 +2464,82 @@ class TestHandlerStarvationResistance(unittest.TestCase):
         # Task must complete BEFORE run() returns
         self.assertEqual(steps, ["started", "done", "run:completed"],
                          f"Scheduled task didn't block completion: {steps}")
+
+    def test_coroutine_handler_not_starved_by_generator(self):
+        """A non-persistent coroutine handler (e.g. HTTP executor) completes
+        even when a persistent zero-sleep generator is active.
+
+        Without _restep_done_generators, done gen_step tasks end up in the
+        wait_set as already-done, causing asyncio.wait to return without
+        yielding.  The coroutine handler never gets event loop time.
+        """
+
+        class Stream(Template):
+            seq: int
+
+        class HandleStreamGoal(Rule):
+            goal(Stream(seq=n))
+
+        class StreamResult(Template):
+            seq: int
+
+        class OnStream(Rule):
+            s = Stream(seq=n)
+            asserts(StreamResult(seq=n))
+
+        class Request(Template):
+            key: Symbol
+
+        class HandleRequestGoal(Rule):
+            goal(Request(key=k))
+
+        class Response(Template):
+            key: Symbol
+
+        class OnResponse(Rule):
+            r = Request(key=k)
+            asserts(Response(key=k))
+
+        handler_completed = []
+
+        async def stream_gen(goal, env):
+            """Zero-sleep persistent generator (WebSocket pattern)."""
+            for i in range(10):
+                Stream(__env__=env, seq=i)
+                yield
+
+        async def request_handler(goal, env):
+            """Coroutine handler (HTTP executor pattern)."""
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            Request(__env__=env, key=Symbol("done"))
+            handler_completed.append(True)
+
+        self.env.define(Stream)
+        self.env.define(StreamResult)
+        self.env.define(Request)
+        self.env.define(Response)
+        self.env.define(HandleStreamGoal)
+        self.env.define(HandleRequestGoal)
+        self.env.define(OnStream)
+        self.env.define(OnResponse)
+        self.runner.register_handler(Stream, stream_gen)
+        self.runner.register_handler(Request, request_handler)
+        self.env.reset()
+
+        async def drive():
+            await self.runner.run(max_cycles=30)
+            await self.runner.close()
+
+        asyncio.run(drive())
+
+        self.assertGreaterEqual(len(handler_completed), 1,
+                                "Coroutine handler starved by generator")
+
+        rname = Response.__clipspyx_dsl__.name
+        responses = list(self.env.find_template(rname).facts())
+        self.assertGreaterEqual(len(responses), 1,
+                                "Response fact never asserted")
 
 
 if __name__ == '__main__':

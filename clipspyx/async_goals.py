@@ -65,10 +65,10 @@ _EXHAUSTED = object()
 async def _gen_step(agen):
     """Advance an async generator by one step.
 
-    The ``sleep(0)`` after ``__anext__`` yields to the event loop before
-    the task completes, ensuring that I/O callbacks for other handlers
-    (HTTP responses, etc.) are processed even when the generator has
-    buffered data and ``__anext__`` returns without suspending.
+    The ``sleep(0)`` after ``__anext__`` ensures the gen_step task needs
+    two ``_run_once`` iterations to complete, preventing
+    ``_restep_done_generators`` from immediately creating a replacement
+    during the single yield at the start of ``_wait_for_handlers``.
     """
     try:
         result = await agen.__anext__()
@@ -234,11 +234,26 @@ class AsyncRunner:
         # close() called automatically - all tasks cancelled, handlers disabled
     """
 
-    def __init__(self, env):
+    def __init__(self, env, *, run_batch_size=10):
+        """Create a new AsyncRunner for the given environment.
+
+        Parameters
+        ----------
+        env : Environment
+            The CLIPS environment to manage.
+        run_batch_size : int or None
+            Maximum number of CLIPS rules to fire per batch before
+            yielding to the event loop.  Each yield gives the event loop
+            a full ``_run_once`` iteration, allowing I/O callbacks (httpx
+            connections, DNS, TLS, etc.) to progress during rule
+            execution.  Set to ``None`` to disable batching (fire all
+            rules without yielding — original behavior).
+        """
         state = getattr(env, '_goal_handler_state', None)
         if state is None:
             enable_goal_handlers(env)
         self.env = env
+        self._run_batch_size = run_batch_size
         self._persistent_tasks = {}           # goal_index -> asyncio.Task
         self._generators = {}                 # task_id -> async generator
         self._closed = False
@@ -337,6 +352,30 @@ class AsyncRunner:
         finally:
             self.env._runner_ref = None
 
+    async def _run_env(self, limit):
+        """Run CLIPS rules in batches, yielding between batches.
+
+        Each yield gives the event loop a full ``_run_once`` iteration,
+        allowing I/O callbacks (httpx connections, DNS, TLS, etc.) to
+        progress during rule execution rather than only between cycles.
+        """
+        batch = self._run_batch_size
+        if batch is None:
+            self.env.run(limit)
+            return
+        if limit is not None:
+            remaining = limit
+            while remaining > 0:
+                fired = self.env.run(min(batch, remaining))
+                if not fired:
+                    break
+                remaining -= fired
+                if remaining > 0:
+                    await asyncio.sleep(0)
+        else:
+            while self.env.run(batch):
+                await asyncio.sleep(0)
+
     async def _run_loop(self, state, limit, max_cycles):
         """Core inference loop."""
         state.halted = False
@@ -345,6 +384,7 @@ class AsyncRunner:
         while max_cycles is None or cycle < max_cycles:
             cycle += 1
 
+            self._restep_done_generators(state)
             self._prune_done_persistent()
             self._prune_done_orphaned()
             self._prune_done_scheduled()
@@ -354,12 +394,16 @@ class AsyncRunner:
 
             self._in_env_run = True
             try:
-                self.env.run(limit)
+                await self._run_env(limit)
             finally:
                 self._in_env_run = False
 
             if state.halted:
                 return "halted"
+
+            # Re-step generators that completed during batch yields
+            # (before _dispatch_goals, which would create duplicates).
+            self._restep_done_generators(state)
 
             self._dispatch_goals(state)
             self._detach_retracted_goals(state)
@@ -383,29 +427,57 @@ class AsyncRunner:
             if reason is not None:
                 return reason
 
-            # Yield to the event loop between cycles so that external
-            # async tasks (e.g. schedule_async coroutines created by
-            # rule actions via asyncio.create_task) get a chance to
-            # execute.  Safe for timer facts because _timer_every now
-            # retracts the previous fact before asserting the next one
-            # (not on re-step via finally).
+            # Yield to the event loop between cycles for external task
+            # scheduling.  The batched _run_env already provides I/O
+            # time during rule execution.
             await asyncio.sleep(0)
 
         return "max_cycles"
 
     def _prune_done_persistent(self):
-        """Remove completed persistent tasks that have no generator.
-
-        Tasks with generators are NOT pruned here.  They must go through
-        ``_process_done`` (via ``asyncio.wait``) so the generator gets a
-        replacement step task or is properly closed.  To ensure they
-        reach ``_process_done``, they are included in the wait set even
-        when done — ``asyncio.wait`` returns them immediately.
-        """
+        """Remove completed persistent tasks from tracking."""
         for idx in [i for i, t in self._persistent_tasks.items()
-                    if t.done() and id(t) not in self._generators]:
+                    if t.done()]:
             task = self._persistent_tasks.pop(idx)
             self._handler_tasks.discard(task)
+
+    def _restep_done_generators(self, state):
+        """Create replacement gen_step tasks for generators that completed
+        outside ``asyncio.wait`` (e.g. during the end-of-loop yield).
+
+        Without this, done gen_step tasks would either be pruned by
+        ``_prune_done_persistent`` (abandoning the generator) or included
+        in the wait set as already-done (causing ``asyncio.wait`` to
+        return without yielding, starving other handlers).
+        """
+        for idx in list(self._persistent_tasks):
+            task = self._persistent_tasks[idx]
+            if not task.done():
+                continue
+            gen = self._generators.pop(id(task), None)
+            if gen is None:
+                continue  # no generator; _prune_done_persistent handles it
+            self._handler_tasks.discard(task)
+
+            if task.cancelled():
+                asyncio.create_task(gen.aclose())
+                del self._persistent_tasks[idx]
+                continue
+
+            if task.exception():
+                asyncio.create_task(gen.aclose())
+                del self._persistent_tasks[idx]
+                raise GoalHandlerError(
+                    f"Handler failed: {task.exception()}"
+                ) from task.exception()
+
+            if task.result() is not _EXHAUSTED:
+                new_task = asyncio.create_task(_gen_step(gen))
+                self._generators[id(new_task)] = gen
+                self._handler_tasks.add(new_task)
+                self._persistent_tasks[idx] = new_task
+            else:
+                del self._persistent_tasks[idx]
 
     def _prune_done_orphaned(self):
         """Remove completed orphaned tasks, logging any errors."""
@@ -516,17 +588,20 @@ class AsyncRunner:
         Returns ``"completed"`` if no tasks remain (and no wake pending),
         or ``None`` to continue cycling.
         """
-        # Yield to the event loop so external async tasks (e.g.
-        # schedule_async coroutines created by rule actions) get a
-        # chance to execute.  Placed here (after env.run()) rather
-        # than at the end of the cycle to preserve fact visibility:
-        # generator re-steps that retract scoped facts must not run
-        # before the next env.run() sees those facts.
+        # Yield to the event loop so external async tasks get a
+        # chance to execute.
         await asyncio.sleep(0)
 
+        # Process done persistent gen_step tasks that completed outside
+        # asyncio.wait (e.g. during the end-of-loop sleep(0)).  We must
+        # create replacement gen_step tasks HERE, before building the
+        # wait set, so asyncio.wait never sees already-done tasks
+        # (which would cause it to return without yielding, starving
+        # other handlers like HTTP executors).
+        self._restep_done_generators(state)
+
         wait_set = set(state.pending.values()) | {
-            t for t in self._persistent_tasks.values()
-            if not t.done() or id(t) in self._generators
+            t for t in self._persistent_tasks.values() if not t.done()
         } | {
             t for t in self._orphaned_pending if not t.done()
         } | {
@@ -544,6 +619,14 @@ class AsyncRunner:
                 "scheduled=%d) wake_set=%s",
                 len(wait_set), len(already_done), len(orphaned_in_set),
                 len(scheduled_in_set), self._wake_event.is_set())
+            # Show pending task states (are they started or queued?)
+            for idx, t in state.pending.items():
+                coro = t.get_coro()
+                awaiting = getattr(coro, 'cr_await', None)
+                _log.debug(
+                    "  pending[%s]: %s done=%s awaiting=%s",
+                    idx, t.get_name(), t.done(),
+                    type(awaiting).__name__ if awaiting else "NOT_STARTED")
 
         # If nothing to wait on, check whether wake() was called.
         if not wait_set:
