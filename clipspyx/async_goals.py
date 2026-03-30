@@ -8,9 +8,12 @@ facts. Timers are the first built-in handler type.
 
 import asyncio
 import inspect
+import logging
 import time as _time
 import warnings
 import weakref
+
+_log = logging.getLogger("clipspyx.async_goals")
 from dataclasses import dataclass, field
 
 from clipspyx.common import CLIPS_MAJOR
@@ -241,6 +244,7 @@ class AsyncRunner:
         self._closed = False
         self._skipped = set()                 # goal indices completed without satisfying
         self._orphaned_pending = set()        # detached tasks (goal retracted mid-flight)
+        self._scheduled_tasks = set()         # user-submitted tasks (block completion)
         self._wake_event = asyncio.Event()
         self._in_env_run = False              # suppress notify during rule execution
         self._handler_tasks = set()           # tracked handler asyncio.Tasks
@@ -268,9 +272,21 @@ class AsyncRunner:
         not block completion.  Errors are logged as warnings.
         """
         task = asyncio.create_task(coro)
-        self._orphaned_pending.add(task)
+        self._scheduled_tasks.add(task)
         self._handler_tasks.add(task)
-        self._wake_event.set()
+        # No wake() needed: the task is in _scheduled_tasks which is
+        # included in the wait set.  Calling wake() would cause
+        # asyncio.wait to return immediately via wake_task, preventing
+        # the event loop from processing the scheduled coroutine.
+        if _log.isEnabledFor(logging.DEBUG):
+            _log.debug(
+                "schedule: task=%s scheduled=%d in_env_run=%s",
+                task.get_name(), len(self._scheduled_tasks),
+                self._in_env_run)
+            task.add_done_callback(lambda t: _log.debug(
+                "scheduled task %s DONE: cancelled=%s exc=%s",
+                t.get_name(), t.cancelled(),
+                t.exception() if not t.cancelled() else None))
         return task
 
     def wake(self):
@@ -331,6 +347,7 @@ class AsyncRunner:
 
             self._prune_done_persistent()
             self._prune_done_orphaned()
+            self._prune_done_scheduled()
 
             if state.halted:
                 return "halted"
@@ -347,10 +364,20 @@ class AsyncRunner:
             self._dispatch_goals(state)
             self._detach_retracted_goals(state)
 
-            if not state.pending and not self._has_active_persistent():
+            if (not state.pending
+                    and not self._has_active_persistent()
+                    and not self._has_active_scheduled()):
                 return "completed"
             if max_cycles is not None and cycle >= max_cycles:
                 return "max_cycles"
+
+            if _log.isEnabledFor(logging.DEBUG):
+                _log.debug(
+                    "cycle %d: orphaned=%d handler_tasks=%d pending=%d "
+                    "persistent=%d",
+                    cycle, len(self._orphaned_pending),
+                    len(self._handler_tasks), len(state.pending),
+                    len(self._persistent_tasks))
 
             reason = await self._wait_for_handlers(state)
             if reason is not None:
@@ -367,10 +394,18 @@ class AsyncRunner:
         return "max_cycles"
 
     def _prune_done_persistent(self):
-        """Remove completed persistent tasks from tracking."""
+        """Remove completed persistent tasks that have no generator.
+
+        Tasks with generators are NOT pruned here.  They must go through
+        ``_process_done`` (via ``asyncio.wait``) so the generator gets a
+        replacement step task or is properly closed.  To ensure they
+        reach ``_process_done``, they are included in the wait set even
+        when done — ``asyncio.wait`` returns them immediately.
+        """
         for idx in [i for i, t in self._persistent_tasks.items()
-                    if t.done()]:
-            del self._persistent_tasks[idx]
+                    if t.done() and id(t) not in self._generators]:
+            task = self._persistent_tasks.pop(idx)
+            self._handler_tasks.discard(task)
 
     def _prune_done_orphaned(self):
         """Remove completed orphaned tasks, logging any errors."""
@@ -387,6 +422,27 @@ class AsyncRunner:
     def _has_active_persistent(self):
         """True if any persistent task is still running."""
         return any(not t.done() for t in self._persistent_tasks.values())
+
+    def _has_active_scheduled(self):
+        """True if any user-submitted scheduled task is still running."""
+        return any(not t.done() for t in self._scheduled_tasks)
+
+    def _prune_done_scheduled(self):
+        """Remove completed scheduled tasks, logging any errors."""
+        for task in list(self._scheduled_tasks):
+            if task.done():
+                self._scheduled_tasks.discard(task)
+                self._handler_tasks.discard(task)
+                if task.cancelled():
+                    warnings.warn(
+                        f"Scheduled task {task.get_name()} was cancelled",
+                        stacklevel=1,
+                    )
+                elif task.exception():
+                    warnings.warn(
+                        f"Scheduled task failed: {task.exception()}",
+                        stacklevel=1,
+                    )
 
     def _create_handler_task(self, handler, goal):
         """Create a task from a handler invocation.
@@ -469,10 +525,25 @@ class AsyncRunner:
         await asyncio.sleep(0)
 
         wait_set = set(state.pending.values()) | {
-            t for t in self._persistent_tasks.values() if not t.done()
+            t for t in self._persistent_tasks.values()
+            if not t.done() or id(t) in self._generators
         } | {
             t for t in self._orphaned_pending if not t.done()
+        } | {
+            t for t in self._scheduled_tasks if not t.done()
         }
+
+        if _log.isEnabledFor(logging.DEBUG):
+            already_done = {t for t in wait_set if t.done()}
+            orphaned_in_set = {
+                t for t in self._orphaned_pending if t in wait_set}
+            scheduled_in_set = {
+                t for t in self._scheduled_tasks if t in wait_set}
+            _log.debug(
+                "_wait: wait_set=%d (already_done=%d orphaned=%d "
+                "scheduled=%d) wake_set=%s",
+                len(wait_set), len(already_done), len(orphaned_in_set),
+                len(scheduled_in_set), self._wake_event.is_set())
 
         # If nothing to wait on, check whether wake() was called.
         if not wait_set:
@@ -482,11 +553,12 @@ class AsyncRunner:
             return "completed"
 
         # Create a task that completes when wake() is called.
+        # wake_event was cleared above, so this won't fire immediately.
         wake_task = asyncio.create_task(self._wake_event.wait())
         wait_set.add(wake_task)
 
         try:
-            done, _ = await asyncio.wait(
+            done, pending = await asyncio.wait(
                 wait_set, return_when=asyncio.FIRST_COMPLETED)
         finally:
             wake_task.cancel()
@@ -500,6 +572,13 @@ class AsyncRunner:
         if woken:
             self._wake_event.clear()
             done.discard(wake_task)
+
+        if _log.isEnabledFor(logging.DEBUG):
+            orphaned_done = {
+                t for t in done if t in self._orphaned_pending}
+            _log.debug(
+                "_wait: done=%d (orphaned=%d woken=%s) pending=%d",
+                len(done), len(orphaned_done), woken, len(pending))
 
         # Process any actual handler tasks that completed.
         if done:
@@ -523,12 +602,20 @@ class AsyncRunner:
         for task in done:
             self._handler_tasks.discard(task)
 
-            # Orphaned tasks: just clean up, don't propagate errors.
-            if task in self._orphaned_pending:
+            # Orphaned / scheduled tasks: clean up, don't propagate errors.
+            if task in self._orphaned_pending or task in self._scheduled_tasks:
+                is_scheduled = task in self._scheduled_tasks
                 self._orphaned_pending.discard(task)
-                if not task.cancelled() and task.exception():
+                self._scheduled_tasks.discard(task)
+                if task.cancelled():
+                    if is_scheduled:
+                        warnings.warn(
+                            f"Scheduled task {task.get_name()} was cancelled",
+                            stacklevel=1,
+                        )
+                elif task.exception():
                     warnings.warn(
-                        f"Orphaned handler failed: {task.exception()}",
+                        f"Detached task failed: {task.exception()}",
                         stacklevel=1,
                     )
                 continue
@@ -582,6 +669,9 @@ class AsyncRunner:
         for task in self._orphaned_pending:
             task.cancel()
         self._orphaned_pending.clear()
+        for task in self._scheduled_tasks:
+            task.cancel()
+        self._scheduled_tasks.clear()
         # Generator cleanup happens via task cancellation above
         self._generators.clear()
         self._handler_tasks.clear()

@@ -2374,6 +2374,97 @@ class TestHandlerStarvationResistance(unittest.TestCase):
         self.assertEqual(schedule_results, ["step1", "done"],
                          "runner.schedule() task did not complete during run()")
 
+    def test_persistent_generator_not_abandoned_across_cycles(self):
+        """Persistent generator survives when its gen_step completes outside
+        asyncio.wait (e.g. during the end-of-loop sleep(0)).
+
+        Without the fix, _prune_done_persistent would remove the done
+        gen_step without closing the generator or creating a replacement.
+        _dispatch_goals would create a brand new handler each cycle,
+        abandoning the old generator (no finally, no aclose).
+        """
+
+        class Feed(Template):
+            seq: int
+
+        class HandleFeedGoal(Rule):
+            goal(Feed(seq=n))
+
+        class FeedResult(Template):
+            seq: int
+
+        class OnFeed(Rule):
+            f = Feed(seq=n)
+            asserts(FeedResult(seq=n))
+
+        lifecycle = []
+
+        async def feed_gen(goal, env):
+            """Generator that tracks its lifecycle."""
+            lifecycle.append("started")
+            try:
+                for i in range(5):
+                    Feed(__env__=env, seq=i)
+                    lifecycle.append(f"yield-{i}")
+                    yield
+                    # No sleep: gen_step may complete during end-of-loop
+                    # sleep(0), outside asyncio.wait.
+            finally:
+                lifecycle.append("finally")
+
+        self.env.define(Feed)
+        self.env.define(FeedResult)
+        self.env.define(HandleFeedGoal)
+        self.env.define(OnFeed)
+        self.runner.register_handler(Feed, feed_gen)
+        self.env.reset()
+
+        async def drive():
+            await self.runner.run(max_cycles=20)
+            await self.runner.close()
+
+        asyncio.run(drive())
+
+        # Generator must have started exactly ONCE (not re-dispatched)
+        self.assertEqual(lifecycle.count("started"), 1,
+                         f"Generator re-dispatched: {lifecycle}")
+
+        # Must have yielded multiple times (survived across cycles)
+        yields = [e for e in lifecycle if e.startswith("yield-")]
+        self.assertGreaterEqual(len(yields), 3,
+                                f"Generator didn't survive: {lifecycle}")
+
+        # finally block must have run (on close or exhaustion)
+        self.assertIn("finally", lifecycle,
+                      f"Generator abandoned without finally: {lifecycle}")
+
+    def test_scheduled_task_blocks_completion(self):
+        """runner.run() does not return 'completed' while a scheduled task
+        is still running, even if no goals or handlers remain."""
+
+        steps = []
+
+        async def drive():
+            async def slow_task():
+                steps.append("started")
+                # Multiple yields to outlast any handler activity
+                for i in range(5):
+                    await asyncio.sleep(0)
+                steps.append("done")
+
+            self.runner.schedule(slow_task())
+            # No handlers registered — without _scheduled_tasks blocking
+            # completion, the runner would return "completed" immediately.
+            result = await self.runner.run()
+            steps.append(f"run:{result}")
+            await self.runner.close()
+
+        asyncio.run(drive())
+
+        # Task must complete BEFORE run() returns
+        self.assertEqual(steps, ["started", "done", "run:completed"],
+                         f"Scheduled task didn't block completion: {steps}")
+
 
 if __name__ == '__main__':
     unittest.main()
