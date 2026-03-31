@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.10.7] - 2026-03-30
+
+### Added
+- `manylinux_aarch64` wheels: CI now builds on `ubuntu-24.04-arm` for
+  ARM64 Linux (Apple Silicon, AWS Graviton, Raspberry Pi, etc.)
+
 ## [0.10.6] - 2026-03-30
 
 ### Fixed
@@ -294,7 +300,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `git apply` patch failure on Windows due to CRLF corruption ([989e154](https://github.com/inferal-oss/clipspyx/commit/989e154), [f95829d](https://github.com/inferal-oss/clipspyx/commit/f95829d))
 - Linux wheels rejected by PyPI due to `linux_x86_64` platform tag ([233faa3](https://github.com/inferal-oss/clipspyx/commit/233faa3))
 
-[Unreleased]: https://github.com/inferal-oss/clipspyx/compare/v0.10.6...HEAD
+[Unreleased]: https://github.com/inferal-oss/clipspyx/compare/v0.10.7...HEAD
+[0.10.7]: https://github.com/inferal-oss/clipspyx/compare/v0.10.6...v0.10.7
 [0.10.6]: https://github.com/inferal-oss/clipspyx/compare/v0.10.5...v0.10.6
 [0.10.5]: https://github.com/inferal-oss/clipspyx/compare/v0.10.4...v0.10.5
 [0.10.4]: https://github.com/inferal-oss/clipspyx/compare/v0.10.3...v0.10.4
